@@ -30,7 +30,7 @@ CARD_NAME = "Abbosov Abrorbek"
 bot = telebot.TeleBot(TOKEN)
 
 CHANNEL_USERNAME = "@latareya_channel"
-PAID_PRICE = 5000
+PAID_PRICE = 5000  # VIP sandiq boshlang'ich narxi
 
 # Bazalar
 registered_users = set()
@@ -44,11 +44,9 @@ free_box_prizes = { 3: "500 so'm", 7: "1000 so'm" }
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
 box_settings = { "max_boxes": 10 }
 
-# Promokodlar bazasi: { "promokod_nomi": summa }
+# Promokodlar bazasi
 promocodes = { "START2026": 1000 }
 used_promos = {}
-
-# Tekin sandiq ochgan foydalanuvchilar bazasi (1 marta ochish uchun)
 used_free_box = set()
 
 def check_sub(user_id):
@@ -156,6 +154,15 @@ def handle_menu(message):
             user_state[user_id] = None
             bot.send_message(message.chat.id, f"✅ Kanal o'zgardi: {CHANNEL_USERNAME}")
             return
+        elif state == "set_vip_price":
+            global PAID_PRICE
+            if text.isdigit():
+                PAID_PRICE = int(text)
+                user_state[user_id] = None
+                bot.send_message(message.chat.id, f"✅ VIP sandiq narxi {PAID_PRICE} so'm qilib belgilandi!")
+            else:
+                bot.send_message(message.chat.id, "❌ Faqat raqam kiriting!")
+            return
         elif state == "add_promo_code":
             parts = text.split()
             if len(parts) == 2 and parts[1].isdigit():
@@ -188,7 +195,52 @@ def handle_menu(message):
                 bot.send_message(message.chat.id, "❌ Faqat raqam kiriting!")
             return
 
-    # --- PROMOKODNI TEKSHIRISH (Muhim tuzatish) ---
+    # --- ASOSIY MENYU TUGMALARI (Bularni boshqasi bilan adashtirmaydi) ---
+    if text == "💰 Mening balansim":
+        user_state[user_id] = None
+        bal = user_balances.get(user_id, 0)
+        bot.send_message(message.chat.id, f"💰 Sizning balansingiz: {bal} so'm")
+        return
+
+    elif text == "🎟 Promokod":
+        user_state[user_id] = "waiting_promocode"
+        bot.send_message(message.chat.id, "🎟 Promokodni kiriting:")
+        return
+
+    elif text == "🎁 Tekin sandiq":
+        user_state[user_id] = None
+        if user_id in used_free_box:
+            bot.send_message(message.chat.id, "⚠️ Siz allaqachon tekin sandiqni ochgansiz! Keyingi safar admin yangilaganda ochishingiz mumkin.")
+        else:
+            markup = types.InlineKeyboardMarkup(row_width=5)
+            buttons = [types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}") for i in range(1, box_settings["max_boxes"] + 1)]
+            markup.add(*buttons)
+            bot.send_message(message.chat.id, "🎁 O'zingizga yoqqan raqamdagi tekin sandiqni tanlang:", reply_markup=markup)
+        return
+
+    elif text == "💎 VIP (Pullik) sandiq":
+        user_state[user_id] = None
+        bal = user_balances.get(user_id, 0)
+        if bal < PAID_PRICE:
+            bot.send_message(message.chat.id, f"❌ Balansingizda yetarli pul yo'q!\n\nVIP sandiq narxi: {PAID_PRICE} so'm\nSizda: {bal} so'm")
+        else:
+            markup = types.InlineKeyboardMarkup(row_width=5)
+            buttons = [types.InlineKeyboardButton(f"💎 {i}", callback_data=f"vip_box_{i}") for i in range(1, box_settings["max_boxes"] + 1)]
+            markup.add(*buttons)
+            bot.send_message(message.chat.id, f"💎 VIP sandiq narxi: {PAID_PRICE} so'm.\nO'zingizga yoqqan raqamni tanlang:", reply_markup=markup)
+        return
+
+    elif text == "➕ Hisobni to'ldirish":
+        user_state[user_id] = "waiting_topup_amount"
+        bot.send_message(
+            message.chat.id, 
+            f"💳 Hisobni to'ldirish uchun karta:\n`{CARD_NUMBER}`\nSohibi: {CARD_NAME}\n\n"
+            f"Iltimos, kartaga pul o'tkazgach, **qancha summa tashlaganingizni raqamda yozib yuboring** (masalan: `5000`):", 
+            parse_mode="Markdown"
+        )
+        return
+
+    # --- FAQAT PROMOKOD Kiritilgandagina ishlaydigan joy ---
     if state == "waiting_promocode":
         code = text.strip().upper()
         user_state[user_id] = None
@@ -208,7 +260,7 @@ def handle_menu(message):
             bot.send_message(message.chat.id, "❌ Bunday promokod mavjud emas yoki eskirgan!")
         return
 
-    # --- HISOBNI TO'LDIRISH (SUMMA) ---
+    # --- HISOBNI TO'LDIRISH SUMMASI ---
     if state == "waiting_topup_amount":
         if text.isdigit():
             user_state[user_id] = {"state": "waiting_topup_screen", "amount": int(text)}
@@ -219,16 +271,22 @@ def handle_menu(message):
 
     # Admin Panel menyusi
     if text == "👨‍💻 Admin Panel" and user_id == ADMIN_ID:
+        user_state[user_id] = None
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add("📢 Kanal Sozlash", "📦 Qutilarni sozlash")
-        markup.add("🎟 Promokod qo'shish", "📊 Statistika")
-        markup.add("🚪 Menuga qaytish")
-        bot.send_message(message.chat.id, f"👨‍💻 **Admin Panel**\n\n📌 Jami sandiqlar: {box_settings['max_boxes']} ta", reply_markup=markup)
+        markup.add("💎 VIP narxini o'zgartirish", "🎟 Promokod qo'shish")
+        markup.add("📊 Statistika", "🚪 Menuga qaytish")
+        bot.send_message(message.chat.id, f"👨‍💻 **Admin Panel**\n\n📌 Jami sandiqlar: {box_settings['max_boxes']} ta\n💎 VIP narxi: {PAID_PRICE} so'm", reply_markup=markup)
         return
 
     if text == "📢 Kanal Sozlash" and user_id == ADMIN_ID:
         user_state[user_id] = "set_channel"
         bot.send_message(message.chat.id, "Yangi kanal username'ini kiriting (Masalan: `@kanalim`):")
+        return
+
+    if text == "💎 VIP narxini o'zgartirish" and user_id == ADMIN_ID:
+        user_state[user_id] = "set_vip_price"
+        bot.send_message(message.chat.id, f"Hozirgi VIP narx: {PAID_PRICE} so'm.\nYangi narxni raqamda kiriting (Masalan: 7000):")
         return
 
     if text == "🎟 Promokod qo'shish" and user_id == ADMIN_ID:
@@ -265,8 +323,8 @@ def handle_menu(message):
     if text == "⬅️ Orqaga" and user_id == ADMIN_ID:
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add("📢 Kanal Sozlash", "📦 Qutilarni sozlash")
-        markup.add("🎟 Promokod qo'shish", "📊 Statistika")
-        markup.add("🚪 Menuga qaytish")
+        markup.add("💎 VIP narxini o'zgartirish", "🎟 Promokod qo'shish")
+        markup.add("📊 Statistika", "🚪 Menuga qaytish")
         bot.send_message(message.chat.id, "Admin panel:", reply_markup=markup)
         return
 
@@ -278,43 +336,6 @@ def handle_menu(message):
         user_state[user_id] = None
         send_main_menu(message.chat.id, user_id)
         return
-
-    # Asosiy tugmalar (Foydalanuvchilar uchun)
-    if text == "💰 Mening balansim":
-        bal = user_balances.get(user_id, 0)
-        bot.send_message(message.chat.id, f"💰 Sizning balansingiz: {bal} so'm")
-
-    elif text == "🎟 Promokod":
-        user_state[user_id] = "waiting_promocode"
-        bot.send_message(message.chat.id, "🎟 Promokodni kiriting:")
-
-    elif text == "🎁 Tekin sandiq":
-        if user_id in used_free_box:
-            bot.send_message(message.chat.id, "⚠️ Siz allaqachon tekin sandiqni ochgansiz! Keyingi safar admin yangilaganda ochishingiz mumkin.")
-        else:
-            markup = types.InlineKeyboardMarkup(row_width=5)
-            buttons = [types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}") for i in range(1, box_settings["max_boxes"] + 1)]
-            markup.add(*buttons)
-            bot.send_message(message.chat.id, "🎁 O'zingizga yoqqan raqamdagi tekin sandiqni tanlang:", reply_markup=markup)
-
-    elif text == "💎 VIP (Pullik) sandiq":
-        bal = user_balances.get(user_id, 0)
-        if bal < PAID_PRICE:
-            bot.send_message(message.chat.id, f"❌ Balansingizda yetarli pul yo'q!\n\nVIP sandiq narxi: {PAID_PRICE} so'm\nSizda: {bal} so'm")
-        else:
-            markup = types.InlineKeyboardMarkup(row_width=5)
-            buttons = [types.InlineKeyboardButton(f"💎 {i}", callback_data=f"vip_box_{i}") for i in range(1, box_settings["max_boxes"] + 1)]
-            markup.add(*buttons)
-            bot.send_message(message.chat.id, f"💎 VIP sandiq narxi: {PAID_PRICE} so'm.\nO'zingizga yoqqan raqamni tanlang:", reply_markup=markup)
-
-    elif text == "➕ Hisobni to'ldirish":
-        user_state[user_id] = "waiting_topup_amount"
-        bot.send_message(
-            message.chat.id, 
-            f"💳 Hisobni to'ldirish uchun karta:\n`{CARD_NUMBER}`\nSohibi: {CARD_NAME}\n\n"
-            f"Iltimos, kartaga pul o'tkazgach, **qancha summa tashlaganingizni raqamda yozib yuboring** (masalan: `5000`):", 
-            parse_mode="Markdown"
-        )
 
 # --- RASM KELGANDA ---
 @bot.message_handler(content_types=['photo'])
