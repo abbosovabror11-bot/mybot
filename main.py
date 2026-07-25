@@ -46,8 +46,10 @@ box_settings = { "max_boxes": 10 }
 
 # Promokodlar bazasi: { "promokod_nomi": summa }
 promocodes = { "START2026": 1000 }
-# Ishlatgan foydalanuvchilarni saqlash: { user_id: [ishlatgan_kodlar_royxati] }
 used_promos = {}
+
+# Tekin sandiq ochgan foydalanuvchilar bazasi (1 marta ochish uchun)
+used_free_box = set()
 
 def check_sub(user_id):
     if not CHANNEL_USERNAME:
@@ -155,7 +157,6 @@ def handle_menu(message):
             bot.send_message(message.chat.id, f"✅ Kanal o'zgardi: {CHANNEL_USERNAME}")
             return
         elif state == "add_promo_code":
-            # Kutilayotgan format: KOD SUMMA (masalan: BONUS 5000)
             parts = text.split()
             if len(parts) == 2 and parts[1].isdigit():
                 code_name = parts[0].upper()
@@ -187,7 +188,7 @@ def handle_menu(message):
                 bot.send_message(message.chat.id, "❌ Faqat raqam kiriting!")
             return
 
-    # --- PROMOKODNI FAollashtirish (Foydalanuvchi uchun) ---
+    # --- PROMOKODNI TEKSHIRISH (Muhim tuzatish) ---
     if state == "waiting_promocode":
         code = text.strip().upper()
         user_state[user_id] = None
@@ -202,7 +203,7 @@ def handle_menu(message):
                 amt = promocodes[code]
                 user_balances[user_id] += amt
                 used_promos[user_id].append(code)
-                bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Promokod muvaffaqiyatli faollashtirildi.\nBalansingizga **{amt} so'm** qo'shildi! 💰", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Promokod faollashtirildi.\nBalansingizga **{amt} so'm** qo'shildi! 💰", parse_mode="Markdown")
         else:
             bot.send_message(message.chat.id, "❌ Bunday promokod mavjud emas yoki eskirgan!")
         return
@@ -288,10 +289,13 @@ def handle_menu(message):
         bot.send_message(message.chat.id, "🎟 Promokodni kiriting:")
 
     elif text == "🎁 Tekin sandiq":
-        markup = types.InlineKeyboardMarkup(row_width=5)
-        buttons = [types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}") for i in range(1, box_settings["max_boxes"] + 1)]
-        markup.add(*buttons)
-        bot.send_message(message.chat.id, "🎁 O'zingizga yoqqan raqamdagi tekin sandiqni tanlang:", reply_markup=markup)
+        if user_id in used_free_box:
+            bot.send_message(message.chat.id, "⚠️ Siz allaqachon tekin sandiqni ochgansiz! Keyingi safar admin yangilaganda ochishingiz mumkin.")
+        else:
+            markup = types.InlineKeyboardMarkup(row_width=5)
+            buttons = [types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}") for i in range(1, box_settings["max_boxes"] + 1)]
+            markup.add(*buttons)
+            bot.send_message(message.chat.id, "🎁 O'zingizga yoqqan raqamdagi tekin sandiqni tanlang:", reply_markup=markup)
 
     elif text == "💎 VIP (Pullik) sandiq":
         bal = user_balances.get(user_id, 0)
@@ -379,6 +383,11 @@ def callback_handler(call):
         return
 
     if data.startswith("free_box_"):
+        if user_id in used_free_box:
+            bot.answer_callback_query(call.id, "❌ Siz allaqachon tekin sandiq ochgansiz!", show_alert=True)
+            return
+
+        used_free_box.add(user_id)
         box_num = int(data.split("_")[2])
         prize = free_box_prizes.get(box_num)
 
