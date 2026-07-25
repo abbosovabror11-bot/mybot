@@ -20,7 +20,7 @@ import random
 
 # ⚠️ BOSHIRIQDA FAQAT 2 TA SOZLAMANI SOZLAYSUR:
 TOKEN = "8609443477:AAEbM-IFJ9Zn_ILkuQi5DZHB2etPqyDv-ps"  # BotFather'dan olingan token
-ADMIN_ID = 8694110588           # Telegram ID'ingiz
+ADMIN_ID = "8694110588"           # Telegram ID'ingiz
 
 CARD_NUMBER = "9860606756173831"  # Karta raqamingiz
 CARD_NAME = "Abbosov Abrorbek"           # Karta egasi
