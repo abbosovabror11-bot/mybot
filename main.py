@@ -20,7 +20,7 @@ threading.Thread(target=run_flask).start()
 # ====================================================================
 
 # ==================== SOZLAMALAR ====================
-TOKEN = "8822760910:AAHWsJgPHdfNK5MDsiNlvQpFSwu1RspxZMo"  # Botingiz tokeni
+TOKEN = "8630740028:AAGeLn8RLQczuX75cAay1S3VCRl8omXLHeA"  # Botingiz tokeni
 ADMIN_ID = 8694110588                           # ID raqamingiz
 
 CARD_NUMBER = "9860606756173831"
