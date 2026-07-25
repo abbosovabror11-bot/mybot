@@ -58,10 +58,7 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
-    
-    # Global eski jadval o'rniga foydalanuvchiga moslashtirilgani ishlatiladi
     cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
-    
     cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     conn.commit()
     conn.close()
@@ -644,7 +641,12 @@ def callback_handler(call):
     if data.startswith("free_box_"):
         box_num = int(data.split("_")[2])
         
-        # Foydalanuvchi bu tekin qutini oldin ochganmi tekshiramiz
+        # Xavfsizlik cheklovi: Admin belgilagan tekin quti limitidan oshib ketsa
+        if box_num > box_settings["free_max_boxes"]:
+            bot.answer_callback_query(call.id, "❌ Bu quti hozirda mavjud emas!", show_alert=True)
+            return
+
+        # Foydalanuvchi bu aniq raqamli tekin qutini oldin ochganmi tekshiramiz
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT 1 FROM user_opened_free_boxes WHERE user_id = ? AND box_num = ?', (user_id, box_num))
@@ -680,6 +682,10 @@ def callback_handler(call):
     elif data.startswith("vip_box_"):
         box_num = int(data.split("_")[2])
         
+        if box_num > box_settings["vip_max_boxes"]:
+            bot.answer_callback_query(call.id, "❌ Bu VIP quti hozirda mavjud emas!", show_alert=True)
+            return
+
         # 5 sekundlik cheklov
         current_time = time.time()
         last_vip_time = vip_cooldowns.get(user_id, 0)
