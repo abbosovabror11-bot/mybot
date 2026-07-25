@@ -71,7 +71,6 @@ def init_db():
             code TEXT
         )
     ''')
-    # Tekin qutilar uchun global jadval (hamma uchun umumiy)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS global_opened_boxes (
             box_num INTEGER PRIMARY KEY,
@@ -79,7 +78,6 @@ def init_db():
             opened_by INTEGER
         )
     ''')
-    # VIP qutilar uchun har bir foydalanuvchiga alohida jadval
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS vip_opened_boxes (
             user_id INTEGER,
@@ -283,7 +281,7 @@ def handle_menu(message):
                 forced_channels.append({"id": ch_id, "link": ch_link, "title": ch_title})
                 bot.send_message(message.chat.id, f"✅ Homiy kanal qo'shildi!\nNomi: {ch_title}")
             except Exception as e:
-                bot.send_message(message.chat.id, f"❌ Xatolik! Xatolik: {e}")
+                bot.send_message(message.chat.id, f"❌ Xatolik: {e}")
             send_admin_panel(message.chat.id)
             return
 
@@ -776,8 +774,9 @@ def callback_handler(call):
         # 5 sekundlik koldown tekshiruvi
         current_time = time.time()
         last_vip_time = vip_cooldowns.get(user_id, 0)
-        if current_time - last_vip_time < 5:
-            remaining_sec = int(5 - (current_time - last_vip_time))
+        diff = current_time - last_vip_time
+        if diff < 5:
+            remaining_sec = int(5 - diff)
             bot.answer_callback_query(call.id, f"⏳ Iltimos kuting! Yana {remaining_sec} sekund qoldi.", show_alert=True)
             return
 
@@ -786,9 +785,9 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "❌ Balansingiz yetmadi!", show_alert=True)
             return
 
-        # Pulni yechamiz va vaqtni yangilaymiz (5 sekund)
+        # Pulni yechamiz va vaqtni yangilaymiz
         update_user_balance(user_id, -PAID_PRICE)
-        vip_cooldowns[user_id] = current_time
+        vip_cooldowns[user_id] = time.time()
 
         prize = vip_box_prizes.get(box_num)
         prize_text = prize if prize else "Bo'sh"
