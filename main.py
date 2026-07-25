@@ -21,7 +21,7 @@ threading.Thread(target=run_flask).start()
 
 # ==================== SOZLAMALAR ====================
 TOKEN = "8822760910:AAHWsJgPHdfNK5MDsiNlvQpFSwu1RspxZMo"  # Botingiz tokeni
-ADMIN_ID = 8694110588                           # ID raqamingiz (son ko'rinishida)
+ADMIN_ID = 8694110588                           # ID raqamingiz
 
 CARD_NUMBER = "9860606756173831"
 CARD_NAME = "Abbosov Abrorbek"
@@ -29,18 +29,23 @@ CARD_NAME = "Abbosov Abrorbek"
 
 bot = telebot.TeleBot(TOKEN)
 
-# Dynamic variables
 CHANNEL_USERNAME = "@latareya_channel"
 PAID_PRICE = 5000
 
-# Bazalar va saqlagichlar
-registered_users = set()  # 1 ta Telegram akkauntdan 1 marta kirish uchun
+# Bazalar va sozlamalar
+registered_users = set()
 users_db = set()
 user_balances = {}
 captcha_storage = {}
 user_state = {}
 
-# Obuna tekshirish funksiyasi
+# Admin tomonidan sozlanadigan quti va sovrinlar bazasi
+box_settings = {
+    "free_box_prize": "500 so'm",     # Tekin sandiq sovrini
+    "vip_box_prize": "20000 so'm",    # VIP sandiq sovrini
+    "max_boxes": 100                  # Jami qutilar soni
+}
+
 def check_sub(user_id):
     if not CHANNEL_USERNAME:
         return True
@@ -50,7 +55,6 @@ def check_sub(user_id):
     except Exception:
         return True
 
-# Obuna so'rash klaviaturasi
 def send_sub_request(chat_id):
     markup = types.InlineKeyboardMarkup()
     btn_link = types.InlineKeyboardButton("📢 Kanalga o'tish", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}")
@@ -68,11 +72,10 @@ def send_sub_request(chat_id):
 def start_cmd(message):
     user_id = message.from_user.id
     
-    # 🛑 1 ta akkauntdan faqat 1 marta kirish cheklovi
     if user_id in registered_users and user_id != ADMIN_ID:
         bot.send_message(
             message.chat.id, 
-            "⚠️ **Siz allaqachon ro'yxatdan o'tgansiz!**\nBitta akkauntdan botni qayta boshlay olmaysiz.",
+            "⚠️ **Siz allaqachon ro'yxatdan o'tgansiz!**",
             parse_mode="Markdown"
         )
         return
@@ -81,7 +84,6 @@ def start_cmd(message):
     if user_id not in user_balances:
         user_balances[user_id] = 0
 
-    # Kanal obunasini tekshirish
     if not check_sub(user_id):
         send_sub_request(message.chat.id)
         return
@@ -112,7 +114,7 @@ def check_captcha(message):
 
     if message.text.isdigit() and int(message.text) == correct_ans:
         del captcha_storage[user_id]
-        registered_users.add(user_id)  # Akkaunt ro'yxatga olindi
+        registered_users.add(user_id)
         send_main_menu(message.chat.id, user_id)
     else:
         bot.send_message(message.chat.id, "❌ Noto'g'ri javob. Qayta urinib ko'ring:")
@@ -139,30 +141,86 @@ def handle_menu(message):
     user_id = message.from_user.id
     text = message.text
 
-    # Obuna tekshiruv (Admin bo'lmasa)
     if user_id != ADMIN_ID and not check_sub(user_id):
         send_sub_request(message.chat.id)
         return
 
-    # Admin: Kanal username o'zgartirish
-    if user_state.get(user_id) == "set_channel" and user_id == ADMIN_ID:
-        global CHANNEL_USERNAME
-        CHANNEL_USERNAME = text.strip()
-        user_state[user_id] = None
-        bot.send_message(message.chat.id, f"✅ Majburiy obuna kanali o'zgardi:\n👉 **{CHANNEL_USERNAME}**")
-        return
+    # --- ADMIN HOLATLari (SOZLAMALAR) ---
+    state = user_state.get(user_id)
+    if user_id == ADMIN_ID:
+        if state == "set_channel":
+            global CHANNEL_USERNAME
+            CHANNEL_USERNAME = text.strip()
+            user_state[user_id] = None
+            bot.send_message(message.chat.id, f"✅ Kanal o'zgardi: {CHANNEL_USERNAME}")
+            return
+        elif state == "set_free_prize":
+            box_settings["free_box_prize"] = text.strip()
+            user_state[user_id] = None
+            bot.send_message(message.chat.id, f"✅ Tekin sandiq sovrini yangilandi: {text}")
+            return
+        elif state == "set_vip_prize":
+            box_settings["vip_box_prize"] = text.strip()
+            user_state[user_id] = None
+            bot.send_message(message.chat.id, f"✅ VIP sandiq sovrini yangilandi: {text}")
+            return
+        elif state == "set_max_boxes":
+            if text.isdigit():
+                box_settings["max_boxes"] = int(text)
+                user_state[user_id] = None
+                bot.send_message(message.chat.id, f"✅ Jami qutilar soni o'zgardi: {text} ta")
+            else:
+                bot.send_message(message.chat.id, "❌ Faqat raqam kiriting!")
+            return
 
-    # Admin Panel
+    # Admin Panel menyusi
     if text == "👨‍💻 Admin Panel" and user_id == ADMIN_ID:
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("📢 Kanal Sozlash", "📊 Statistika")
-        markup.add("🚪 Menuga qaytish")
-        bot.send_message(message.chat.id, f"👨‍💻 **Admin Panel**\n\nHozirgi kanal: {CHANNEL_USERNAME}", reply_markup=markup)
+        markup.add("📢 Kanal Sozlash", "📦 Qutilarni sozlash")
+        markup.add("📊 Statistika", "🚪 Menuga qaytish")
+        bot.send_message(
+            message.chat.id, 
+            f"👨‍💻 **Admin Panel**\n\n"
+            f"📌 Kanal: {CHANNEL_USERNAME}\n"
+            f"📦 Qutilar soni: {box_settings['max_boxes']} ta\n"
+            f"🎁 Tekin sovrin: {box_settings['free_box_prize']}\n"
+            f"💎 VIP sovrin: {box_settings['vip_box_prize']}", 
+            reply_markup=markup
+        )
         return
 
     if text == "📢 Kanal Sozlash" and user_id == ADMIN_ID:
         user_state[user_id] = "set_channel"
         bot.send_message(message.chat.id, "Yangi kanal username'ini kiriting (Masalan: `@kanalim`):")
+        return
+
+    if text == "📦 Qutilarni sozlash" and user_id == ADMIN_ID:
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("Qutilar sonini o'zgartirish", "Tekin sovrinni o'zgartirish")
+        markup.add("VIP sovrinni o'zgartirish", "⬅️ Orqaga")
+        bot.send_message(message.chat.id, "Qaysi birini o'zgartirmoqchisiz?", reply_markup=markup)
+        return
+
+    if text == "Qutilar sonini o'zgartirish" and user_id == ADMIN_ID:
+        user_state[user_id] = "set_max_boxes"
+        bot.send_message(message.chat.id, "Jami qutilar sonini raqamda kiriting (Masalan: 150):")
+        return
+
+    if text == "Tekin sovrinni o'zgartirish" and user_id == ADMIN_ID:
+        user_state[user_id] = "set_free_prize"
+        bot.send_message(message.chat.id, "Tekin sandiq ichiga tushadigan sovrinni yozing (Masalan: 1000 so'm):")
+        return
+
+    if text == "VIP sovrinni o'zgartirish" and user_id == ADMIN_ID:
+        user_state[user_id] = "set_vip_prize"
+        bot.send_message(message.chat.id, "VIP sandiq ichiga tushadigan sovrinni yozing (Masalan: 50000 so'm):")
+        return
+
+    if text == "⬅️ Orqaga" and user_id == ADMIN_ID:
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add("📢 Kanal Sozlash", "📦 Qutilarni sozlash")
+        markup.add("📊 Statistika", "🚪 Menuga qaytish")
+        bot.send_message(message.chat.id, "Admin panel:", reply_markup=markup)
         return
 
     if text == "📊 Statistika" and user_id == ADMIN_ID:
@@ -173,15 +231,14 @@ def handle_menu(message):
         send_main_menu(message.chat.id, user_id)
         return
 
-    # Asosiy tugmalar
+    # Asosiy tugmalar (Foydalanuvchilar uchun)
     if text == "💰 Mening balansim":
         bal = user_balances.get(user_id, 0)
         bot.send_message(message.chat.id, f"💰 Sizning balansingiz: {bal} so'm")
 
     elif text == "🎁 Tekin sandiq":
-        prize = random.choice([100, 200, 500, 0, 1000])
-        user_balances[user_id] = user_balances.get(user_id, 0) + prize
-        bot.send_message(message.chat.id, f"🎁 Tekin sandiqdan sizga **{prize} so'm** yutuq chiqdi!", parse_mode="Markdown")
+        prize_text = box_settings["free_box_prize"]
+        bot.send_message(message.chat.id, f"🎁 Tekin sandiq ochildi!\nSizga tushgan sovrin: **{prize_text}**", parse_mode="Markdown")
 
     elif text == "💎 VIP (Pullik) sandiq":
         bal = user_balances.get(user_id, 0)
@@ -189,9 +246,8 @@ def handle_menu(message):
             bot.send_message(message.chat.id, f"❌ Balansingizda yetarli pul yo'q!\n\nVIP sandiq narxi: {PAID_PRICE} so'm\nSizda: {bal} so'm")
         else:
             user_balances[user_id] -= PAID_PRICE
-            vip_prize = random.choice([10000, 20000, 50000])
-            user_balances[user_id] += vip_prize
-            bot.send_message(message.chat.id, f"🎉 VIP Sandiq ochildi! Siz **{vip_prize} so'm** yutib oldingiz!", parse_mode="Markdown")
+            vip_prize = box_settings["vip_box_prize"]
+            bot.send_message(message.chat.id, f"🎉 VIP Sandiq ochildi!\nSiz yutib oldingiz: **{vip_prize}**", parse_mode="Markdown")
 
     elif text == "➕ Hisobni to'ldirish":
         bot.send_message(
@@ -201,4 +257,3 @@ def handle_menu(message):
         )
 
 bot.infinity_polling()
-        
