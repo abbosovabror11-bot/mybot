@@ -7,7 +7,7 @@ import random
 import time
 import sqlite3
 
-# ==================== FLASK SERVER (Render uchun) ====================
+# ==================== FLASK SERVER ====================
 app = Flask(__name__)
 
 @app.route('/')
@@ -19,7 +19,7 @@ def run_flask():
     app.run(host='0.0.0.0', port=port)
 
 threading.Thread(target=run_flask).start()
-# ====================================================================
+# ====================================================
 
 # ==================== SOZLAMALAR ====================
 TOKEN = "8630740028:AAGeLn8RLQczuX75cAay1S3VCRl8omXLHeA"  # Botingiz tokeni
@@ -43,49 +43,24 @@ vip_cooldowns = {}
 
 free_box_prizes = { 3: "500 so'm", 7: "1000 so'm" }
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
-box_settings = { "max_boxes": 10 }
+
+# ALOHIDA QUTI QISMLARI
+box_settings = { 
+    "free_max_boxes": 10,  # Tekin qutilar soni
+    "vip_max_boxes": 10    # VIP qutilar soni
+}
+
 promocodes = { "START2026": {"amount": 1000, "limit": 10, "used_count": 0} }
 
-# ==================== DATABASE (MA'LUMOTLAR BAZASI) ====================
+# ==================== DATABASE ====================
 def init_db():
     conn = sqlite3.connect('bot_database.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id INTEGER PRIMARY KEY,
-            balance INTEGER DEFAULT 0
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            prize TEXT,
-            box_info TEXT,
-            date TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS used_promos (
-            user_id INTEGER,
-            code TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS global_opened_boxes (
-            box_num INTEGER PRIMARY KEY,
-            prize TEXT,
-            opened_by INTEGER
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS vip_opened_boxes (
-            user_id INTEGER,
-            box_num INTEGER,
-            prize TEXT,
-            PRIMARY KEY (user_id, box_num)
-        )
-    ''')
+    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS global_opened_boxes (box_num INTEGER PRIMARY KEY, prize TEXT, opened_by INTEGER)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     conn.commit()
     conn.close()
 
@@ -125,7 +100,7 @@ def add_history(user_id, prize, box_info):
     cursor.execute('INSERT INTO history (user_id, prize, box_info, date) VALUES (?, ?, ?, ?)', (user_id, prize, box_info, date_str))
     conn.commit()
     conn.close()
-# ======================================================================
+# ==================================================
 
 def check_user_sub(user_id):
     if not forced_channels:
@@ -142,19 +117,13 @@ def check_user_sub(user_id):
 def send_sub_request(chat_id):
     markup = types.InlineKeyboardMarkup()
     for ch in forced_channels:
-        markup.add(types.InlineKeyboardButton(f"📢 {ch.get('title', 'Kanalga o\'tish')}", url=ch["link"]))
+        markup.add(types.InlineKeyboardButton(f"📢 {ch.get('title', 'Kanal')}", url=ch["link"]))
     markup.add(types.InlineKeyboardButton("✅ Obunani tekshirish", callback_data="check_subscription"))
-    bot.send_message(
-        chat_id, 
-        "⚠️ **Botdan foydalanish uchun quyidagi homiy kanallarga obuna bo'ling:**",
-        parse_mode="Markdown", 
-        reply_markup=markup
-    )
+    bot.send_message(chat_id, "⚠️ Botdan foydalanish uchun homiy kanallarga obuna bo'ling:", reply_markup=markup)
 
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     user_id = message.from_user.id
-    
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
@@ -172,11 +141,7 @@ def start_cmd(message):
         num1 = random.randint(1, 10)
         num2 = random.randint(1, 10)
         captcha_storage[user_id] = num1 + num2
-
-        bot.send_message(
-            message.chat.id, 
-            f"🤖 **Botimizga xush kelibsiz!**\n\nIltimos, Captcha misolini yeching:\n\n👉 **{num1} + {num2} = ?**"
-        )
+        bot.send_message(message.chat.id, f"🤖 Xush kelibsiz!\n\nCaptcha misolini yeching:\n👉 **{num1} + {num2} = ?**", parse_mode="Markdown")
     else:
         send_main_menu(message.chat.id, user_id)
 
@@ -184,30 +149,23 @@ def start_cmd(message):
 def callback_check_sub(call):
     user_id = call.from_user.id
     is_subbed, _ = check_user_sub(user_id)
-    
     if is_subbed:
         bot.answer_callback_query(call.id, "✅ Obuna tasdiqlandi!")
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except:
             pass
-        
         num1 = random.randint(1, 10)
         num2 = random.randint(1, 10)
         captcha_storage[user_id] = num1 + num2
-        
-        bot.send_message(
-            call.message.chat.id, 
-            f"✅ Tasdiqlandi!\n\nIltimos, Captcha misolini yeching:\n\n👉 **{num1} + {num2} = ?**"
-        )
+        bot.send_message(call.message.chat.id, f"✅ Tasdiqlandi!\n\nCaptcha misolini yeching:\n👉 **{num1} + {num2} = ?**", parse_mode="Markdown")
     else:
-        bot.answer_callback_query(call.id, "❌ Siz hali hamma homiy kanalga obuna bo'lmadingiz!", show_alert=True)
+        bot.answer_callback_query(call.id, "❌ Hali hamma kanalga obuna bo'lmadingiz!", show_alert=True)
 
 @bot.message_handler(func=lambda message: message.from_user.id in captcha_storage)
 def check_captcha(message):
     user_id = message.from_user.id
     correct_ans = captcha_storage.get(user_id)
-
     if message.text.isdigit() and int(message.text) == correct_ans:
         del captcha_storage[user_id]
         send_main_menu(message.chat.id, user_id)
@@ -216,23 +174,13 @@ def check_captcha(message):
 
 def send_main_menu(chat_id, user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn1 = types.KeyboardButton("🎁 Tekin sandiq")
-    btn2 = types.KeyboardButton("💎 VIP (Pullik) sandiq")
-    btn3 = types.KeyboardButton("💰 Mening balansim")
-    btn4 = types.KeyboardButton("➕ Hisobni to'ldirish")
-    btn5 = types.KeyboardButton("🎟 Promokod")
-    btn6 = types.KeyboardButton("🎁 Kundalik bonus")
-    btn7 = types.KeyboardButton("📜 Mening yutuqlarim")
-    
-    markup.add(btn1, btn2)
-    markup.add(btn3, btn4)
-    markup.add(btn5, btn6)
-    markup.add(btn7)
-
+    markup.add(types.KeyboardButton("🎁 Tekin sandiq"), types.KeyboardButton("💎 VIP (Pullik) sandiq"))
+    markup.add(types.KeyboardButton("💰 Mening balansim"), types.KeyboardButton("➕ Hisobni to'ldirish"))
+    markup.add(types.KeyboardButton("🎟 Promokod"), types.KeyboardButton("🎁 Kundalik bonus"))
+    markup.add(types.KeyboardButton("📜 Mening yutuqlarim"))
     if user_id == ADMIN_ID:
         markup.add(types.KeyboardButton("👨‍💻 Admin Panel"))
-
-    bot.send_message(chat_id, "🎉 Xush kelibsiz! Asosiy menyu:", reply_markup=markup)
+    bot.send_message(chat_id, "🎉 Asosiy menyu:", reply_markup=markup)
 
 def send_admin_panel(chat_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -248,16 +196,13 @@ def send_admin_panel(chat_id):
     total_users = cursor.fetchone()[0]
     conn.close()
 
-    channels_count = len(forced_channels)
     bot.send_message(
         chat_id, 
-        f"👨‍💻 **Admin Panel**\n\n"
-        f"👥 Jami foydalanuvchilar: {total_users} ta\n"
-        f"📌 Jami sandiqlar: {box_settings['max_boxes']} ta\n"
-        f"💎 VIP narxi: {PAID_PRICE} so'm\n"
-        f"🎁 Kunlik bonus: {DAILY_BONUS} so'm\n"
-        f"📢 Homiy kanallar: {channels_count} ta", 
-        reply_markup=markup,
+        f"👨‍💻 **Admin Panel**\n\n👥 Jami foydalanuvchilar: {total_users} ta\n"
+        f"📦 Tekin qutilar: {box_settings['free_max_boxes']} ta\n"
+        f"💎 VIP qutilar: {box_settings['vip_max_boxes']} ta\n"
+        f"💎 VIP narxi: {PAID_PRICE} so'm", 
+        reply_markup=markup, 
         parse_mode="Markdown"
     )
 
@@ -274,12 +219,11 @@ def handle_menu(message):
             ch_id = parts[0].strip()
             ch_link = parts[1].strip() if len(parts) > 1 else f"https://t.me/{ch_id.replace('@', '')}"
             ch_title = parts[2].strip() if len(parts) > 2 else ch_id
-            
             try:
                 chat_info = bot.get_chat(ch_id)
                 ch_title = chat_info.title or ch_title
                 forced_channels.append({"id": ch_id, "link": ch_link, "title": ch_title})
-                bot.send_message(message.chat.id, f"✅ Homiy kanal qo'shildi!\nNomi: {ch_title}")
+                bot.send_message(message.chat.id, f"✅ Kanal qo'shildi: {ch_title}")
             except Exception as e:
                 bot.send_message(message.chat.id, f"❌ Xatolik: {e}")
             send_admin_panel(message.chat.id)
@@ -290,9 +234,9 @@ def handle_menu(message):
             user_state[user_id] = None
             if text.isdigit():
                 PAID_PRICE = int(text)
-                bot.send_message(message.chat.id, f"✅ VIP sandiq narxi {PAID_PRICE} so'm qilindi!")
+                bot.send_message(message.chat.id, f"✅ VIP narxi {PAID_PRICE} so'm qilindi!")
             else:
-                bot.send_message(message.chat.id, "❌ Faqat raqam kiritilmadi.")
+                bot.send_message(message.chat.id, "❌ Faqat raqam kiriting.")
             send_admin_panel(message.chat.id)
             return
 
@@ -301,9 +245,9 @@ def handle_menu(message):
             user_state[user_id] = None
             if text.isdigit():
                 DAILY_BONUS = int(text)
-                bot.send_message(message.chat.id, f"✅ Kunlik bonus miqdori **{DAILY_BONUS} so'm** qilindi!", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"✅ Kunlik bonus {DAILY_BONUS} so'm qilindi!")
             else:
-                bot.send_message(message.chat.id, "❌ Faqat raqam kiritilmadi.")
+                bot.send_message(message.chat.id, "❌ Faqat raqam kiriting.")
             send_admin_panel(message.chat.id)
             return
 
@@ -312,10 +256,8 @@ def handle_menu(message):
             parts = text.split()
             if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
                 code_name = parts[0].upper()
-                code_amt = int(parts[1])
-                code_limit = int(parts[2])
-                promocodes[code_name] = {"amount": code_amt, "limit": code_limit, "used_count": 0}
-                bot.send_message(message.chat.id, f"✅ Promokod qo'shildi!\n🎟 Kod: {code_name}\n💵 Summa: {code_amt} so'm\n👥 Limit: {code_limit} ta odam")
+                promocodes[code_name] = {"amount": int(parts[1]), "limit": int(parts[2]), "used_count": 0}
+                bot.send_message(message.chat.id, f"✅ Promokod qo'shildi: {code_name}")
             else:
                 bot.send_message(message.chat.id, "❌ Noto'g'ri format!")
             send_admin_panel(message.chat.id)
@@ -335,7 +277,7 @@ def handle_menu(message):
                     success += 1
                 except:
                     pass
-            bot.send_message(message.chat.id, f"✅ Xabar {success} ta foydalanuvchiga yuborildi!")
+            bot.send_message(message.chat.id, f"✅ Xabar {success} ta kishiga yuborildi!")
             send_admin_panel(message.chat.id)
             return
 
@@ -343,10 +285,10 @@ def handle_menu(message):
             if text.isdigit():
                 target_uid = int(text)
                 user_state[user_id] = {"state": "manage_user_action", "target": target_uid}
-                bot.send_message(message.chat.id, f"Foydalanuvchi ID: {target_uid}\n\nQancha pul qo'shmoqchisiz yoki ayirmoqchisiz? (Masalan: `1000` yoki `-500`):")
+                bot.send_message(message.chat.id, f"Foydalanuvchi ID: {target_uid}\nQancha pul qo'shasiz yoki ayirasiz? (Masalan: `1000` yoki `-500`):", parse_mode="Markdown")
             else:
                 user_state[user_id] = None
-                bot.send_message(message.chat.id, "❌ Faqat raqamli ID kiritilishi kerak.", parse_mode="Markdown")
+                bot.send_message(message.chat.id, "❌ Faqat raqamli ID kiriting.")
                 send_admin_panel(message.chat.id)
             return
 
@@ -358,12 +300,8 @@ def handle_menu(message):
                 update_user_balance(target_uid, amount)
                 new_bal = get_user_balance(target_uid)
                 bot.send_message(message.chat.id, f"✅ Balans o'zgartirildi. Yangi balans: {new_bal} so'm")
-                try:
-                    bot.send_message(target_uid, f"🔔 Admin tomonidan balansingizga **{amount} so'm** ta'sir qilindi. Balans: {new_bal} so'm", parse_mode="Markdown")
-                except:
-                    pass
             else:
-                bot.send_message(message.chat.id, "❌ Noto'g'ri qiymat kiritildi!")
+                bot.send_message(message.chat.id, "❌ Noto'g'ri qiymat!")
             send_admin_panel(message.chat.id)
             return
 
@@ -371,7 +309,7 @@ def handle_menu(message):
             box_num = int(state.split("_")[3])
             free_box_prizes[box_num] = text.strip()
             user_state[user_id] = None
-            bot.send_message(message.chat.id, f"✅ Tekin sandiq ({box_num}) sovrini saqlandi.")
+            bot.send_message(message.chat.id, f"✅ Tekin quti ({box_num}) sovrini saqlandi.")
             send_admin_panel(message.chat.id)
             return
 
@@ -379,24 +317,34 @@ def handle_menu(message):
             box_num = int(state.split("_")[3])
             vip_box_prizes[box_num] = text.strip()
             user_state[user_id] = None
-            bot.send_message(message.chat.id, f"✅ VIP sandiq ({box_num}) sovrini saqlandi.")
+            bot.send_message(message.chat.id, f"✅ VIP quti ({box_num}) sovrini saqlandi.")
             send_admin_panel(message.chat.id)
             return
 
-        elif state == "set_max_boxes":
+        elif state == "set_free_max_boxes":
             user_state[user_id] = None
             if text.isdigit():
-                box_settings["max_boxes"] = int(text)
-                bot.send_message(message.chat.id, f"✅ Jami sandiqlar soni {text} ta bo'ldi.")
+                box_settings["free_max_boxes"] = int(text)
+                bot.send_message(message.chat.id, f"✅ Tekin sandiqlar soni {text} ta qilindi.")
             else:
                 bot.send_message(message.chat.id, "❌ Noto'g'ri format!")
             send_admin_panel(message.chat.id)
             return
 
+        elif state == "set_vip_max_boxes":
+            user_state[user_id] = None
+            if text.isdigit():
+                box_settings["vip_max_boxes"] = int(text)
+                bot.send_message(message.chat.id, f"✅ VIP sandiqlar soni {text} ta qilindi.")
+            else:
+                bot.send_message(message.chat.id, "❌ Noto'g'ri format!")
+            send_admin_panel(message.chat.id)
+            return
+
+    # Foydalanuvchi buyruqlari
     if text == "💰 Mening balansim":
         user_state[user_id] = None
-        bal = get_user_balance(user_id)
-        bot.send_message(message.chat.id, f"💰 Sizning balansingiz: {bal} so'm")
+        bot.send_message(message.chat.id, f"💰 Balansingiz: {get_user_balance(user_id)} so'm")
         return
 
     elif text == "🎟 Promokod":
@@ -411,11 +359,10 @@ def handle_menu(message):
         cursor.execute('SELECT prize, box_info, date FROM history WHERE user_id = ? ORDER BY id DESC LIMIT 10', (user_id,))
         rows = cursor.fetchall()
         conn.close()
-
         if not rows:
-            bot.send_message(message.chat.id, "📜 Sizda hozircha yutuqlar tarixi mavjud emas.")
+            bot.send_message(message.chat.id, "📜 Yutuqlar tarixi bo'sh.")
         else:
-            text_hist = "📜 **Sizning oxirgi yutuqlaringiz:**\n\n"
+            text_hist = "📜 **Oxirgi yutuqlaringiz:**\n\n"
             for r in rows:
                 text_hist += f"🎁 Sovrin: **{r[0]}**\n📦 Quti: {r[1]}\n⏰ Vaqt: {r[2]}\n-------------------\n"
             bot.send_message(message.chat.id, text_hist, parse_mode="Markdown")
@@ -425,17 +372,14 @@ def handle_menu(message):
         user_state[user_id] = None
         current_time = time.time()
         last_time = last_daily_bonus.get(user_id, 0)
-        
         if current_time - last_time < 86400:
-            remaining = int(86400 - (current_time - last_time))
-            hours = remaining // 3600
-            minutes = (remaining % 3600) // 60
-            bot.send_message(message.chat.id, f"⏳ Siz kundalik bonusni olgansiz!\nKeyingi bonus: **{hours} soat {minutes} daqiqa**dan keyin.", parse_mode="Markdown")
+            rem = int(86400 - (current_time - last_time))
+            bot.send_message(message.chat.id, f"⏳ Bonusni olgansiz! Keyingi bonus: {rem // 3600} soatdan keyin.")
         else:
             last_daily_bonus[user_id] = current_time
             update_user_balance(user_id, DAILY_BONUS)
-            add_history(user_id, f"{DAILY_BONUS} so'm", "Kundalik bonus")
-            bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Kunlik bonus sifatida **{DAILY_BONUS} so'm** qo'shildi! 💰", parse_mode="Markdown")
+            add_history(user_id, f"{DAILY_BONUS} so'm", "Kunlik bonus")
+            bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! **{DAILY_BONUS} so'm** qo'shildi! 💰", parse_mode="Markdown")
         return
 
     elif text == "🎁 Tekin sandiq":
@@ -445,67 +389,53 @@ def handle_menu(message):
         cursor.execute('SELECT box_num, prize FROM global_opened_boxes')
         opened_rows = cursor.fetchall()
         conn.close()
-        
         opened_dict = {row[0]: row[1] for row in opened_rows}
 
         markup = types.InlineKeyboardMarkup(row_width=5)
         buttons = []
-        for i in range(1, box_settings["max_boxes"] + 1):
+        for i in range(1, box_settings["free_max_boxes"] + 1):
             if i in opened_dict:
                 p = opened_dict[i]
-                if p != "Bo'sh":
-                    buttons.append(types.InlineKeyboardButton(f"✅ {i}", callback_data=f"opened_box_info_{p}"))
-                else:
-                    buttons.append(types.InlineKeyboardButton(f"❌ {i}", callback_data="opened_box_empty"))
+                buttons.append(types.InlineKeyboardButton(f"✅ {i}" if p != "Bo'sh" else f"❌ {i}", callback_data=f"opened_box_info_{p}" if p != "Bo'sh" else "opened_box_empty"))
             else:
                 buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
         markup.add(*buttons)
-        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Jami: {box_settings['max_boxes']} ta):\nO'zingizga yoqqan raqamni tanlang (Har birini 1 marta ochish mumkin):", reply_markup=markup)
+        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Jami: {box_settings['free_max_boxes']} ta):", reply_markup=markup)
         return
 
     elif text == "💎 VIP (Pullik) sandiq":
         user_state[user_id] = None
         bal = get_user_balance(user_id)
         if bal < PAID_PRICE:
-            bot.send_message(message.chat.id, f"❌ Balansingizda yetarli pul yo'q!\n\nVIP sandiq narxi: {PAID_PRICE} so'm\nSizda: {bal} so'm")
+            bot.send_message(message.chat.id, f"❌ Balans yetarli emas! VIP narxi: {PAID_PRICE} so'm")
         else:
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT box_num, prize FROM vip_opened_boxes WHERE user_id = ?', (user_id,))
             vip_opened = cursor.fetchall()
             conn.close()
-
             vip_dict = {row[0]: row[1] for row in vip_opened}
 
             markup = types.InlineKeyboardMarkup(row_width=5)
             buttons = []
-            for i in range(1, box_settings["max_boxes"] + 1):
+            for i in range(1, box_settings["vip_max_boxes"] + 1):
                 if i in vip_dict:
                     p = vip_dict[i]
-                    if p != "Bo'sh":
-                        buttons.append(types.InlineKeyboardButton(f"✅ {i}", callback_data=f"vip_opened_info_{p}"))
-                    else:
-                        buttons.append(types.InlineKeyboardButton(f"❌ {i}", callback_data="vip_opened_empty"))
+                    buttons.append(types.InlineKeyboardButton(f"✅ {i}" if p != "Bo'sh" else f"❌ {i}", callback_data=f"vip_opened_info_{p}" if p != "Bo'sh" else "vip_opened_empty"))
                 else:
                     buttons.append(types.InlineKeyboardButton(f"💎 {i}", callback_data=f"vip_box_{i}"))
             markup.add(*buttons)
-            bot.send_message(message.chat.id, f"💎 VIP sandiq narxi: {PAID_PRICE} so'm.\n(Ochish oralig'i: 5 soniya). O'zingizga yoqqan raqamni tanlang:", reply_markup=markup)
+            bot.send_message(message.chat.id, f"💎 VIP sandiqlar (Jami: {box_settings['vip_max_boxes']} ta, ochish oralig'i: 5 soniya):", reply_markup=markup)
         return
 
     elif text == "➕ Hisobni to'ldirish":
         user_state[user_id] = "waiting_topup_amount"
-        bot.send_message(
-            message.chat.id, 
-            f"💳 Hisobni to'ldirish uchun karta:\n`{CARD_NUMBER}`\nSohibi: {CARD_NAME}\n\n"
-            f"Kartaga pul o'tkazgach, **qancha summa tashlaganingizni raqamda yozib yuboring** (masalan: `5000`):", 
-            parse_mode="Markdown"
-        )
+        bot.send_message(message.chat.id, f"💳 Karta: `{CARD_NUMBER}`\nEgasi: {CARD_NAME}\n\nQancha summa tashlaganingizni yozing (masalan: `5000`):", parse_mode="Markdown")
         return
 
     if state == "waiting_promocode":
         code = text.strip().upper()
         user_state[user_id] = None
-        
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT 1 FROM used_promos WHERE user_id = ? AND code = ?', (user_id, code))
@@ -513,38 +443,37 @@ def handle_menu(message):
         conn.close()
 
         if code in promocodes:
-            promo_info = promocodes[code]
+            p_info = promocodes[code]
             if already_used:
-                bot.send_message(message.chat.id, "❌ Siz bu promokoddan allaqachon foylangansiz!")
-            elif promo_info["used_count"] >= promo_info["limit"]:
-                bot.send_message(message.chat.id, "❌ Kechirasiz, bu promokodning limiti tugagan!")
+                bot.send_message(message.chat.id, "❌ Bu promokoddan foylangansiz!")
+            elif p_info["used_count"] >= p_info["limit"]:
+                bot.send_message(message.chat.id, "❌ Promokod limiti tugagan!")
             else:
-                promo_info["used_count"] += 1
-                amt = promo_info["amount"]
+                p_info["used_count"] += 1
+                amt = p_info["amount"]
                 update_user_balance(user_id, amt)
-                
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 cursor.execute('INSERT INTO used_promos (user_id, code) VALUES (?, ?)', (user_id, code))
                 conn.commit()
                 conn.close()
-
                 add_history(user_id, f"{amt} so'm", f"Promokod ({code})")
-                bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Promokod faollashtirildi.\nBalansingizga **{amt} so'm** qo'shildi! 💰", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Balansga **{amt} so'm** qo'shildi!", parse_mode="Markdown")
         else:
-            bot.send_message(message.chat.id, "❌ Bunday promokod mavjud emas yoki eskirgan!")
+            bot.send_message(message.chat.id, "❌ Bunday promokod yo'q!")
         return
 
     if state == "waiting_topup_amount":
         if text.isdigit():
             topup_amounts[user_id] = int(text)
             user_state[user_id] = "waiting_topup_screen"
-            bot.send_message(message.chat.id, "📸 Endi to'lov cheki (skrinshot) rasmini yuboring:")
+            bot.send_message(message.chat.id, "📸 Endi to'lov cheki skrinshotini yuboring:")
         else:
             user_state[user_id] = None
-            bot.send_message(message.chat.id, "❌ Noto'g'ri format, bekor qilindi.")
+            bot.send_message(message.chat.id, "❌ Bekor qilindi.")
         return
 
+    # Admin Tugmalari
     if text == "👨‍💻 Admin Panel" and user_id == ADMIN_ID:
         user_state[user_id] = None
         send_admin_panel(message.chat.id)
@@ -552,32 +481,32 @@ def handle_menu(message):
 
     if text == "📢 Kanal Sozlash" and user_id == ADMIN_ID:
         user_state[user_id] = "set_channel"
-        bot.send_message(message.chat.id, "🔗 Kanalning username yoki ID sini yuboring:", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "🔗 Kanal username yoki ID sini yuboring:")
         return
 
     if text == "📋 Kanallar ro'yxati" and user_id == ADMIN_ID:
         if not forced_channels:
-            bot.send_message(message.chat.id, "📭 Hozircha homiy kanallar yo'q.")
+            bot.send_message(message.chat.id, "📭 Kanallar yo'q.")
         else:
             markup = types.InlineKeyboardMarkup()
             for idx, ch in enumerate(forced_channels):
                 markup.add(types.InlineKeyboardButton(f"❌ O'chirish: {ch['title']}", callback_data=f"del_ch_{idx}"))
-            bot.send_message(message.chat.id, "📋 Homiy kanallar ro'yxati:", reply_markup=markup)
+            bot.send_message(message.chat.id, "📋 Kanallar:", reply_markup=markup)
         return
 
     if text == "💎 VIP narxini o'zgartirish" and user_id == ADMIN_ID:
         user_state[user_id] = "set_vip_price"
-        bot.send_message(message.chat.id, f"Hozirgi VIP narx: {PAID_PRICE} so'm. Yangi narxni kiriting:")
+        bot.send_message(message.chat.id, f"Hozirgi VIP narx: {PAID_PRICE} so'm. Yangisini kiriting:")
         return
 
     if text == "🎁 Kunlik bonusni o'zgartirish" and user_id == ADMIN_ID:
         user_state[user_id] = "set_daily_bonus"
-        bot.send_message(message.chat.id, f"Hozirgi kunlik bonus: {DAILY_BONUS} so'm. Yangi summani kiriting:")
+        bot.send_message(message.chat.id, f"Hozirgi kunlik bonus: {DAILY_BONUS} so'm. Yangisini kiriting:")
         return
 
     if text == "🎟 Promokod qo'shish" and user_id == ADMIN_ID:
         user_state[user_id] = "add_promo_code"
-        bot.send_message(message.chat.id, "Masalan: `BONUS 5000 15`", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "Format: `BONUS 5000 15`", parse_mode="Markdown")
         return
 
     if text == "👤 Foydalanuvchini boshqarish" and user_id == ADMIN_ID:
@@ -587,36 +516,43 @@ def handle_menu(message):
 
     if text == "📢 Xabar yuborish (Rassilka)" and user_id == ADMIN_ID:
         user_state[user_id] = "broadcast_message"
-        bot.send_message(message.chat.id, "Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yozing:")
+        bot.send_message(message.chat.id, "Barchaga yuboriladigan xabarni yozing:")
         return
 
     if text == "📦 Qutilarni sozlash" and user_id == ADMIN_ID:
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add("Tekin qutilarga sovrin qo'shish", "VIP qutilarga sovrin qo'shish")
-        markup.add("Sandiqlar sonini o'zgartirish", "⬅️ Orqaga")
+        markup.add("Tekin qutilar sonini o'zgartirish", "VIP qutilar sonini o'zgartirish")
+        markup.add("⬅️ Orqaga")
         bot.send_message(message.chat.id, "Qaysi birini sozlaysiz?", reply_markup=markup)
         return
 
-    if text == "Sandiqlar sonini o'zgartirish" and user_id == ADMIN_ID:
-        user_state[user_id] = "set_max_boxes"
-        bot.send_message(message.chat.id, "Jami sandiqlar sonini kiriting:")
+    if text == "Tekin qutilar sonini o'zgartirish" and user_id == ADMIN_ID:
+        user_state[user_id] = "set_free_max_boxes"
+        bot.send_message(message.chat.id, f"Hozirgi tekin qutilar soni: {box_settings['free_max_boxes']} ta. Yangi sonini kiriting:")
+        return
+
+    if text == "VIP qutilar sonini o'zgartirish" and user_id == ADMIN_ID:
+        user_state[user_id] = "set_vip_max_boxes"
+        bot.send_message(message.chat.id, f"Hozirgi VIP qutilar soni: {box_settings['vip_max_boxes']} ta. Yangi sonini kiriting:")
         return
 
     if text == "Tekin qutilarga sovrin qo'shish" and user_id == ADMIN_ID:
         markup = types.InlineKeyboardMarkup(row_width=5)
-        btns = [types.InlineKeyboardButton(f"Quti {i}", callback_data=f"cfg_free_{i}") for i in range(1, box_settings["max_boxes"]+1)]
+        btns = [types.InlineKeyboardButton(f"Quti {i}", callback_data=f"cfg_free_{i}") for i in range(1, box_settings["free_max_boxes"]+1)]
         markup.add(*btns)
         bot.send_message(message.chat.id, "Qaysi tekin qutiga sovrin yozasiz?", reply_markup=markup)
         return
 
     if text == "VIP qutilarga sovrin qo'shish" and user_id == ADMIN_ID:
         markup = types.InlineKeyboardMarkup(row_width=5)
-        btns = [types.InlineKeyboardButton(f"Quti {i}", callback_data=f"cfg_vip_{i}") for i in range(1, box_settings["max_boxes"]+1)]
+        btns = [types.InlineKeyboardButton(f"VIP {i}", callback_data=f"cfg_vip_{i}") for i in range(1, box_settings["vip_max_boxes"]+1)]
         markup.add(*btns)
         bot.send_message(message.chat.id, "Qaysi VIP qutiga sovrin yozasiz?", reply_markup=markup)
         return
 
     if text == "⬅️ Orqaga" and user_id == ADMIN_ID:
+        user_state[user_id] = None
         send_admin_panel(message.chat.id)
         return
 
@@ -637,30 +573,20 @@ def handle_menu(message):
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     user_id = message.from_user.id
-    state_info = user_state.get(user_id)
-
-    if state_info == "waiting_topup_screen":
+    if user_state.get(user_id) == "waiting_topup_screen":
         amount = topup_amounts.get(user_id, 0)
         photo_id = message.photo[-1].file_id
-        
         user_state[user_id] = None
         if user_id in topup_amounts:
             del topup_amounts[user_id]
 
         bot.send_message(message.chat.id, "✅ Chekingiz adminga yuborildi!")
-
         admin_markup = types.InlineKeyboardMarkup()
-        admin_markup.add(types.InlineKeyboardButton("➕ Balansni tasdiqlash", callback_data=f"approve_topup_{user_id}_{amount}"))
-        
+        admin_markup.add(types.InlineKeyboardButton("➕ Tasdiqlash", callback_data=f"approve_topup_{user_id}_{amount}"))
         try:
-            bot.send_photo(
-                ADMIN_ID,
-                photo_id,
-                caption=f"Yangi to'lov cheki!\n\nFoydalanuvchi ID: {user_id}\nSumma: {amount} so'm",
-                reply_markup=admin_markup
-            )
-        except Exception as e:
-            bot.send_message(message.chat.id, f"❌ Xatolik: {e}")
+            bot.send_photo(ADMIN_ID, photo_id, caption=f"To'lov cheki!\nID: {user_id}\nSumma: {amount} so'm", reply_markup=admin_markup)
+        except:
+            pass
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -668,13 +594,13 @@ def callback_handler(call):
     data = call.data
     username = f"@{call.from_user.username}" if call.from_user.username else f"ID: {user_id}"
 
-    if data == "opened_box_empty" or data == "vip_opened_empty":
-        bot.answer_callback_query(call.id, "❌ Bu quti allaqachon ochilgan va bo'sh chiqqan!", show_alert=True)
+    if data in ["opened_box_empty", "vip_opened_empty"]:
+        bot.answer_callback_query(call.id, "❌ Bu quti bo'sh chiqqan!", show_alert=True)
         return
 
     if data.startswith("opened_box_info_") or data.startswith("vip_opened_info_"):
         prize_name = data.split("_", 3)[3]
-        bot.answer_callback_query(call.id, f"✅ Bu quti ochilgan! Yutuq: {prize_name}", show_alert=True)
+        bot.answer_callback_query(call.id, f"✅ Yutuq: {prize_name}", show_alert=True)
         return
 
     if data.startswith("del_ch_") and user_id == ADMIN_ID:
@@ -682,54 +608,47 @@ def callback_handler(call):
         if 0 <= idx < len(forced_channels):
             removed = forced_channels.pop(idx)
             bot.answer_callback_query(call.id, f"✅ O'chirildi: {removed['title']}")
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="✅ Kanal olib tashlandi.")
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="✅ O'chirildi.")
         return
 
     if data.startswith("cfg_free_") and user_id == ADMIN_ID:
         box_num = data.split("_")[2]
         user_state[user_id] = f"set_free_box_{box_num}"
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, f"Tekin quti ({box_num}) sovrinini yozing:")
+        bot.send_message(call.message.chat.id, f"Tekin quti ({box_num}) uchun sovrin yozing:")
         return
 
     if data.startswith("cfg_vip_") and user_id == ADMIN_ID:
         box_num = data.split("_")[2]
         user_state[user_id] = f"set_vip_box_{box_num}"
         bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, f"VIP quti ({box_num}) sovrinini yozing:")
+        bot.send_message(call.message.chat.id, f"VIP quti ({box_num}) uchun sovrin yozing:")
         return
 
     if data.startswith("approve_topup_") and user_id == ADMIN_ID:
         parts = data.split("_")
-        target_user_id = int(parts[2])
+        target_uid = int(parts[2])
         amount = int(parts[3])
-
-        update_user_balance(target_user_id, amount)
-        add_history(target_user_id, f"{amount} so'm", "Hisobni to'ldirish")
-
+        update_user_balance(target_uid, amount)
+        add_history(target_uid, f"{amount} so'm", "Hisobni to'ldirish")
         bot.answer_callback_query(call.id, "✅ Tasdiqlandi!")
         try:
-            bot.edit_message_caption(
-                caption=call.message.caption + "\n\n[TASDIQLANDI VA BALANSGA QO'SHILDI]",
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id
-            )
+            bot.edit_message_caption(caption=call.message.caption + "\n\n[TASDIQLANDI]", chat_id=call.message.chat.id, message_id=call.message.message_id)
         except:
             pass
-        bot.send_message(target_user_id, f"🎉 Tabriklaymiz! To'lovingiz tasdiqlandi va balansingizga **{amount} so'm** qo'shildi.", parse_mode="Markdown")
+        bot.send_message(target_uid, f"🎉 To'lovingiz tasdiqlandi! Balansga **{amount} so'm** qo'shildi.", parse_mode="Markdown")
         return
 
     if data.startswith("free_box_"):
         box_num = int(data.split("_")[2])
-        
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT 1 FROM global_opened_boxes WHERE box_num = ?', (box_num,))
-        already_opened = cursor.fetchone()
+        opened = cursor.fetchone()
         conn.close()
 
-        if already_opened:
-            bot.answer_callback_query(call.id, "❌ Bu quti allaqachon ochilgan!", show_alert=True)
+        if opened:
+            bot.answer_callback_query(call.id, "❌ Bu quti ochilgan!", show_alert=True)
             return
 
         prize = free_box_prizes.get(box_num)
@@ -743,49 +662,33 @@ def callback_handler(call):
 
         if prize:
             add_history(user_id, prize, f"{box_num}-tekin sandiq")
-            bot.answer_callback_query(call.id, f"🎉 Tabriklaymiz! Sovrin yutdingiz!")
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=f"🎉 **{box_num}-sandiq** ochildi!\n\nSiz yutib oldingiz: **{prize}**",
-                parse_mode="Markdown"
-            )
+            bot.answer_callback_query(call.id, "🎉 Yutdingiz!")
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"🎉 **{box_num}-sandiq** yutug'i: **{prize}**", parse_mode="Markdown")
             try:
-                bot.send_message(ADMIN_ID, f"🎁 **Yangi yutuq!**\n\nFoydalanuvchi: {username} (ID: `{user_id}`)\nSovrin: **{prize}** ({box_num}-tekin sandiq)", parse_mode="Markdown")
-            except Exception as e:
-                print("Admin xabar xatoligi:", e)
-        else:
-            add_history(user_id, "Bo'sh", f"{box_num}-tekin sandiq")
-            bot.answer_callback_query(call.id, "Afsuski, bu sandiq bo'sh chiqdi 😢", show_alert=True)
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=f"📦 **{box_num}-sandiq** ochildi!\n\nAfsuski, bu sandiq bo'sh chiqdi. Keyingi safar omadingiz keladi! 🍀",
-                parse_mode="Markdown"
-            )
-            try:
-                bot.send_message(ADMIN_ID, f"📦 **Bo'sh quti!**\n\nFoydalanuvchi: {username} (ID: `{user_id}`)\n({box_num}-tekin sandiq bo'sh chiqdi)", parse_mode="Markdown")
+                bot.send_message(ADMIN_ID, f"🎁 Yutuq: {username} - {prize} ({box_num}-tekin)", parse_mode="Markdown")
             except:
                 pass
+        else:
+            add_history(user_id, "Bo'sh", f"{box_num}-tekin sandiq")
+            bot.answer_callback_query(call.id, "Bo'sh chiqdi 😢", show_alert=True)
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"📦 **{box_num}-sandiq** bo'sh chiqdi 🍀", parse_mode="Markdown")
 
     elif data.startswith("vip_box_"):
         box_num = int(data.split("_")[2])
         
-        # 5 sekundlik koldown tekshiruvi
+        # 5 sekundlik cheklov
         current_time = time.time()
         last_vip_time = vip_cooldowns.get(user_id, 0)
-        diff = current_time - last_vip_time
-        if diff < 5:
-            remaining_sec = int(5 - diff)
-            bot.answer_callback_query(call.id, f"⏳ Iltimos kuting! Yana {remaining_sec} sekund qoldi.", show_alert=True)
+        if current_time - last_vip_time < 5:
+            rem = int(5 - (current_time - last_vip_time))
+            bot.answer_callback_query(call.id, f"⏳ Kuting! Yana {rem} sekund.", show_alert=True)
             return
 
         bal = get_user_balance(user_id)
         if bal < PAID_PRICE:
-            bot.answer_callback_query(call.id, "❌ Balansingiz yetmadi!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Balans yetmadi!", show_alert=True)
             return
 
-        # Pulni yechamiz va vaqtni yangilaymiz
         update_user_balance(user_id, -PAID_PRICE)
         vip_cooldowns[user_id] = time.time()
 
@@ -800,29 +703,15 @@ def callback_handler(call):
 
         if prize:
             add_history(user_id, prize, f"{box_num}-VIP sandiq")
-            bot.answer_callback_query(call.id, f"💎 Tabriklaymiz! VIP sovrin yutdingiz!")
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=f"🎉 **{box_num}-VIP sandiq** ochildi!\n\nSiz yutib oldingiz: **{prize}**",
-                parse_mode="Markdown"
-            )
+            bot.answer_callback_query(call.id, "💎 VIP yutuq!")
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"🎉 **{box_num}-VIP sandiq** yutug'i: **{prize}**", parse_mode="Markdown")
             try:
-                bot.send_message(ADMIN_ID, f"💎 **VIP Yutuq!**\n\nFoydalanuvchi: {username} (ID: `{user_id}`)\nSovrin: **{prize}** ({box_num}-VIP sandiq)", parse_mode="Markdown")
-            except Exception as e:
-                print("Admin xabar xatoligi:", e)
-        else:
-            add_history(user_id, "Bo'sh", f"{box_num}-VIP sandiq")
-            bot.answer_callback_query(call.id, "Afsuski, bu VIP sandiq bo'sh chiqdi 😢", show_alert=True)
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=f"💎 **{box_num}-VIP sandiq** ochildi!\n\nAfsuski, bu VIP sandiq bo'sh chiqdi. Keyingi safar albatta yutasiz! 🍀",
-                parse_mode="Markdown"
-            )
-            try:
-                bot.send_message(ADMIN_ID, f"💎 **Bo'sh VIP quti!**\n\nFoydalanuvchi: {username} (ID: `{user_id}`)\n({box_num}-VIP sandiq bo'sh chiqdi)", parse_mode="Markdown")
+                bot.send_message(ADMIN_ID, f"💎 VIP Yutuq: {username} - {prize} ({box_num}-VIP)", parse_mode="Markdown")
             except:
                 pass
+        else:
+            add_history(user_id, "Bo'sh", f"{box_num}-VIP sandiq")
+            bot.answer_callback_query(call.id, "Bo'sh VIP sandiq 😢", show_alert=True)
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"💎 **{box_num}-VIP sandiq** bo'sh chiqdi 🍀", parse_mode="Markdown")
 
 bot.infinity_polling()
