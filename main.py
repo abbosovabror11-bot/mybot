@@ -29,8 +29,11 @@ CARD_NAME = "Abbosov Abrorbek"
 
 bot = telebot.TeleBot(TOKEN)
 
-CHANNEL_USERNAME = @latareya_channel
-PAID_PRICE = 5000  # VIP sandiq boshlang'ich narxi
+# Kanallar ro'yxati (Admin paneldan qo'shiladi)
+# Har bir element: {"id": kanal_id_yoki_username, "link": taklif_havolasi, "title": nomi}
+forced_channels = []
+
+PAID_PRICE = 5000
 
 # Bazalar
 registered_users = set()
@@ -49,24 +52,38 @@ promocodes = { "START2026": 1000 }
 used_promos = {}
 used_free_box = set()
 
-def check_sub(user_id):
-    if not CHANNEL_USERNAME:
-        return True
-    try:
-        member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
-        return member.status in ['creator', 'administrator', 'member']
-    except Exception:
-        return True
+def check_user_sub(user_id):
+    """Foydalanuvchi barcha majburiy kanallarga a'zo bo'lganini tekshiradi"""
+    if not forced_channels:
+        return True, None
+    
+    for ch in forced_channels:
+        try:
+            member = bot.get_chat_member(ch["id"], user_id)
+            # member.status quyidagicha bo'lishi mumkin:
+            # 'creator', 'administrator', 'member' -> obuna bo'lgan
+            # 'restricted' -> cheklangan bo'lsa ham guruh/kanal ichida bor
+            # 'left', 'kicked' -> chiqib ketgan yoki haydalgan
+            if member.status not in ['creator', 'administrator', 'member', 'restricted']:
+                return False, ch
+        except Exception:
+            # Agar bot kanalga admin bo'lmasa yoki xatolik bo'lsa, xavfsizlik uchun o'tkazib yubormaslikka harakat qilamiz
+            return False, ch
+            
+    return True, None
 
 def send_sub_request(chat_id):
     markup = types.InlineKeyboardMarkup()
-    btn_link = types.InlineKeyboardButton("📢 Kanalga o'tish", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}")
-    btn_check = types.InlineKeyboardButton("✅ Obunani tekshirish", callback_data="check_subscription")
-    markup.add(btn_link)
-    markup.add(btn_check)
+    
+    # Har bir majburiy kanal uchun tugma qo'shamiz
+    for ch in forced_channels:
+        markup.add(types.InlineKeyboardButton(f"📢 {ch.get('title', 'Kanalga o\'tish')}", url=ch["link"]))
+        
+    markup.add(types.InlineKeyboardButton("✅ Obunani tekshirish", callback_data="check_subscription"))
+    
     bot.send_message(
         chat_id, 
-        f"⚠️ **Botdan foydalanish uchun quyidagi kanalimizga obuna bo'ling:**\n\n👉 {CHANNEL_USERNAME}",
+        "⚠️ **Botdan to'liq foydalanish uchun quyidagi barcha kanal va guruhlarga obuna bo'ling (zayavka tashlang):**",
         parse_mode="Markdown", 
         reply_markup=markup
     )
@@ -75,8 +92,8 @@ def send_sub_request(chat_id):
 def start_cmd(message):
     user_id = message.from_user.id
     
-    # 1. Avval majburiy obunani tekshiramiz
-    if not check_sub(user_id):
+    is_subbed, _ = check_user_sub(user_id)
+    if not is_subbed:
         send_sub_request(message.chat.id)
         return
 
@@ -101,12 +118,17 @@ def start_cmd(message):
 @bot.callback_query_handler(func=lambda call: call.data == "check_subscription")
 def callback_check_sub(call):
     user_id = call.from_user.id
-    if check_sub(user_id):
-        bot.answer_callback_query(call.id, "✅ Obunangiz tasdiqlandi!")
-        bot.delete_message(call.message.chat.id, call.message.message_id)
-        bot.send_message(call.message.chat.id, "✅ Obunangiz tasdiqlandi! Endi /start buyrug'ini bosing.")
+    is_subbed, _ = check_user_sub(user_id)
+    
+    if is_subbed:
+        bot.answer_callback_query(call.id, "✅ Barcha obunalar tasdiqlandi!")
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+        bot.send_message(call.message.chat.id, "✅ Tasdiqlandi! Endi /start buyrug'ini bosing.")
     else:
-        bot.answer_callback_query(call.id, "❌ Siz hali kanalga obuna bo'lmadingiz!", show_alert=True)
+        bot.answer_callback_query(call.id, "❌ Siz hali hamma kanalga obuna bo'lmadingiz yoki zayavka tasdiqlanmadi!", show_alert=True)
 
 @bot.message_handler(func=lambda message: message.from_user.id in captcha_storage)
 def check_captcha(message):
@@ -142,8 +164,8 @@ def handle_menu(message):
     user_id = message.from_user.id
     text = message.text
 
-    # Har qanday tugma bosilganda ham oldin majburiy obunani tekshiramiz
-    if user_id != ADMIN_ID and not check_sub(user_id):
+    is_subbed, _ = check_user_sub(user_id)
+    if user_id != ADMIN_ID and not is_subbed:
         send_sub_request(message.chat.id)
         return
 
@@ -152,11 +174,29 @@ def handle_menu(message):
     # --- ADMIN HOLATLARI ---
     if user_id == ADMIN_ID:
         if state == "set_channel":
-            global CHANNEL_USERNAME
-            CHANNEL_USERNAME = text.strip()
-            user_state[user_id] = None
-            bot.send_message(message.chat.id, f"✅ Kanal o'zgardi: {CHANNEL_USERNAME}")
+            # Bu yerda admin formatda yuboradi: @username yoki -100xxxxxxxxxx | https://t.me/... | Kanal Nomi
+            # Yoki oddiygina kanal userneymi / ID si va havolasini qabul qilamiz
+            parts = text.split("|")
+            ch_id = parts[0].strip()
+            ch_link = parts[1].strip() if len(parts) > 1 else f"https://t.me/{ch_id.replace('@', '')}"
+            ch_title = parts[2].strip() if len(parts) > 2 else ch_id
+            
+            try:
+                # Sinab ko'ramiz bot kanalni ko'ra oladimi
+                chat_info = bot.get_chat(ch_id)
+                ch_title = chat_info.title or ch_title
+                
+                forced_channels.append({
+                    "id": ch_id,
+                    "link": ch_link,
+                    "title": ch_title
+                })
+                user_state[user_id] = None
+                bot.send_message(message.chat.id, f"✅ Kanal muvaffaqiyatli qo'shildi!\nID/User: `{ch_id}`\nNomi: {ch_title}", parse_mode="Markdown")
+            except Exception as e:
+                bot.send_message(message.chat.id, f"❌ Xatolik! Bot bu kanalni topolmadi yoki unga admin emas.\nXatolik: {e}")
             return
+
         elif state == "set_vip_price":
             global PAID_PRICE
             if text.isdigit():
@@ -243,7 +283,7 @@ def handle_menu(message):
         )
         return
 
-    # --- FAQAT PROMOKOD Kiritilgandagina ishlaydigan joy ---
+    # --- PROMOKOD Kiritilgandagina ishlaydigan joy ---
     if state == "waiting_promocode":
         code = text.strip().upper()
         user_state[user_id] = None
@@ -276,15 +316,36 @@ def handle_menu(message):
     if text == "👨‍💻 Admin Panel" and user_id == ADMIN_ID:
         user_state[user_id] = None
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("📢 Kanal Sozlash", "📦 Qutilarni sozlash")
-        markup.add("💎 VIP narxini o'zgartirish", "🎟 Promokod qo'shish")
-        markup.add("📊 Statistika", "🚪 Menuga qaytish")
-        bot.send_message(message.chat.id, f"👨‍💻 **Admin Panel**\n\n📌 Jami sandiqlar: {box_settings['max_boxes']} ta\n💎 VIP narxi: {PAID_PRICE} so'm", reply_markup=markup)
+        markup.add("📢 Kanal Sozlash", "📋 Kanallar ro'yxati")
+        markup.add("📦 Qutilarni sozlash", "💎 VIP narxini o'zgartirish")
+        markup.add("🎟 Promokod qo'shish", "📊 Statistika")
+        markup.add("🚪 Menuga qaytish")
+        
+        channels_count = len(forced_channels)
+        bot.send_message(message.chat.id, f"👨‍💻 **Admin Panel**\n\n📌 Jami sandiqlar: {box_settings['max_boxes']} ta\n💎 VIP narxi: {PAID_PRICE} so'm\n📢 Majburiy kanallar: {channels_count} ta", reply_markup=markup)
         return
 
     if text == "📢 Kanal Sozlash" and user_id == ADMIN_ID:
         user_state[user_id] = "set_channel"
-        bot.send_message(message.chat.id, "Yangi kanal username'ini kiriting (Masalan: `@kanalim`):")
+        bot.send_message(
+            message.chat.id, 
+            "🔗 **Kanal qo'shish usuli:**\n\n"
+            "1. Yopiq kanal, ochiq kanal yoki zayavka kanalining **ID raqami yoki @username** sini yuboring.\n"
+            "*(Masalan: `@kanalim` yoki `-100123456789`)*\n\n"
+            "💡 **Qo'shimcha (tavsiya etiladi):** Agar zayavka (invite) havolasi yoki maxsus nom bermoqchi bo'lsangiz, quyidagicha yuboring:\n"
+            "`@kanalim | https://t.me/+AbCdEfGh | Kanal Nomi`",
+            parse_mode="Markdown"
+        )
+        return
+
+    if text == "📋 Kanallar ro'yxati" and user_id == ADMIN_ID:
+        if not forced_channels:
+            bot.send_message(message.chat.id, "📭 Hozircha majburiy kanallar qo'shilmagan.")
+        else:
+            markup = types.InlineKeyboardMarkup()
+            for idx, ch in enumerate(forced_channels):
+                markup.add(types.InlineKeyboardButton(f"❌ O'chirish: {ch['title']}", callback_data=f"del_ch_{idx}"))
+            bot.send_message(message.chat.id, "📋 Hozirgi majburiy kanallar ro'yxati (o'chirish uchun bosing):", reply_markup=markup)
         return
 
     if text == "💎 VIP narxini o'zgartirish" and user_id == ADMIN_ID:
@@ -325,9 +386,10 @@ def handle_menu(message):
 
     if text == "⬅️ Orqaga" and user_id == ADMIN_ID:
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("📢 Kanal Sozlash", "📦 Qutilarni sozlash")
-        markup.add("💎 VIP narxini o'zgartirish", "🎟 Promokod qo'shish")
-        markup.add("📊 Statistika", "🚪 Menuga qaytish")
+        markup.add("📢 Kanal Sozlash", "📋 Kanallar ro'yxati")
+        markup.add("📦 Qutilarni sozlash", "💎 VIP narxini o'zgartirish")
+        markup.add("🎟 Promokod qo'shish", "📊 Statistika")
+        markup.add("🚪 Menuga qaytish")
         bot.send_message(message.chat.id, "Admin panel:", reply_markup=markup)
         return
 
@@ -371,6 +433,14 @@ def handle_photo(message):
 def callback_handler(call):
     user_id = call.from_user.id
     data = call.data
+
+    if data.startswith("del_ch_") and user_id == ADMIN_ID:
+        idx = int(data.split("_")[2])
+        if 0 <= idx < len(forced_channels):
+            removed = forced_channels.pop(idx)
+            bot.answer_callback_query(call.id, f"✅ O'chirildi: {removed['title']}")
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="✅ Kanal ro'yxatdan olib tashlandi.")
+        return
 
     if data.startswith("cfg_free_") and user_id == ADMIN_ID:
         box_num = data.split("_")[2]
