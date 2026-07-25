@@ -75,17 +75,19 @@ def send_sub_request(chat_id):
 def start_cmd(message):
     user_id = message.from_user.id
     
+    # 1. Avval majburiy obunani tekshiramiz
+    if not check_sub(user_id):
+        send_sub_request(message.chat.id)
+        return
+
     if user_id in registered_users and user_id != ADMIN_ID:
         bot.send_message(message.chat.id, "⚠️ **Siz allaqachon ro'yxatdan o'tgansiz!**", parse_mode="Markdown")
+        send_main_menu(message.chat.id, user_id)
         return
 
     users_db.add(user_id)
     if user_id not in user_balances:
         user_balances[user_id] = 0
-
-    if not check_sub(user_id):
-        send_sub_request(message.chat.id)
-        return
 
     num1 = random.randint(1, 10)
     num2 = random.randint(1, 10)
@@ -102,7 +104,7 @@ def callback_check_sub(call):
     if check_sub(user_id):
         bot.answer_callback_query(call.id, "✅ Obunangiz tasdiqlandi!")
         bot.delete_message(call.message.chat.id, call.message.message_id)
-        bot.send_message(call.message.chat.id, "Obunangiz tasdiqlandi. /start buyrug'ini qayta bosing!")
+        bot.send_message(call.message.chat.id, "✅ Obunangiz tasdiqlandi! Endi /start buyrug'ini bosing.")
     else:
         bot.answer_callback_query(call.id, "❌ Siz hali kanalga obuna bo'lmadingiz!", show_alert=True)
 
@@ -140,6 +142,7 @@ def handle_menu(message):
     user_id = message.from_user.id
     text = message.text
 
+    # Har qanday tugma bosilganda ham oldin majburiy obunani tekshiramiz
     if user_id != ADMIN_ID and not check_sub(user_id):
         send_sub_request(message.chat.id)
         return
@@ -195,7 +198,7 @@ def handle_menu(message):
                 bot.send_message(message.chat.id, "❌ Faqat raqam kiriting!")
             return
 
-    # --- ASOSIY MENYU TUGMALARI (Bularni boshqasi bilan adashtirmaydi) ---
+    # --- ASOSIY MENYU TUGMALARI ---
     if text == "💰 Mening balansim":
         user_state[user_id] = None
         bal = user_balances.get(user_id, 0)
