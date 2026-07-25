@@ -52,7 +52,6 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
-    # Tekin sandiq bitta odam uchun jami 1 ta qilib o'zgartirildi:
     cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free_boxes (user_id INTEGER PRIMARY KEY, prize TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
@@ -203,12 +202,16 @@ def send_admin_panel(chat_id):
     markup.add("📦 Qutilarni sozlash", "💎 VIP narxini o'zgartirish")
     markup.add("🎟 Promokod qo'shish", "🎁 Kunlik bonusni o'zgartirish")
     markup.add("👤 Foydalanuvchini boshqarish", "📢 Xabar yuborish (Rassilka)")
+    markup.add("🔄 Tekin sandiqlarni yangilash")
     markup.add("📊 Statistika", "🚪 Menuga qaytish")
     
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM users')
     total_users = cursor.fetchone()[0]
+    
+    cursor.execute('SELECT COUNT(*) FROM user_opened_free_boxes')
+    opened_free_count = cursor.fetchone()[0]
     conn.close()
 
     free_max = get_max_boxes("free_max_boxes")
@@ -217,7 +220,7 @@ def send_admin_panel(chat_id):
     bot.send_message(
         chat_id, 
         f"👨‍💻 **Admin Panel**\n\n👥 Jami foydalanuvchilar: {total_users} ta\n"
-        f"📦 Tekin qutilar: {free_max} ta\n"
+        f"📦 Tekin qutilar: {free_max} ta (Jami ochilgan: {opened_free_count} ta)\n"
         f"💎 VIP qutilar: {vip_max} ta\n"
         f"💎 VIP narxi: {PAID_PRICE} so'm", 
         reply_markup=markup, 
@@ -231,7 +234,18 @@ def handle_menu(message):
     state = user_state.get(user_id)
 
     if user_id == ADMIN_ID:
-        if state == "set_channel":
+        if text == "🔄 Tekin sandiqlarni yangilash":
+            user_state[user_id] = None
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM user_opened_free_boxes')
+            conn.commit()
+            conn.close()
+            bot.send_message(message.chat.id, "✅ Barcha tekin sandiq limitlari tozalandi! Ochilganlar soni 0 bo'ldi. Hammada yana 1 tadan ochish imkoniyati bor.")
+            send_admin_panel(message.chat.id)
+            return
+
+        elif state == "set_channel":
             user_state[user_id] = None
             parts = text.split("|")
             ch_id = parts[0].strip()
@@ -400,28 +414,8 @@ def handle_menu(message):
             bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! **{DAILY_BONUS} so'm** qo'shildi! 💰", parse_mode="Markdown")
         return
 
-        elif text == "🎁 Tekin sandiq":
+    elif text == "🎁 Tekin sandiq":
         user_state[user_id] = None
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT prize FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
-        opened = cursor.fetchone()
-        conn.close()
-
-        if opened:
-            bot.send_message(message.chat.id, f"❌ Siz allaqachon tekin sandiq ochgansiz! Yutug'ingiz: **{opened[0]}**", parse_mode="Markdown")
-            return
-
-        free_max = get_max_boxes("free_max_boxes")
-        markup = types.InlineKeyboardMarkup(row_width=5)
-        buttons = []
-        for i in range(1, free_max + 1):
-            buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
-        markup.add(*buttons)
-        bot.send_message(message.chat.id, f"🎁 Tekin sandiqni tanlang (Faqat 1 marta ochish mumkin):", reply_markup=markup)
-        return
-
         
         conn = get_db_connection()
         cursor = conn.cursor()
