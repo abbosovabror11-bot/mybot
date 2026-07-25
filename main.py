@@ -43,12 +43,6 @@ vip_cooldowns = {}
 
 free_box_prizes = { 3: "500 so'm", 7: "1000 so'm" }
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
-
-box_settings = { 
-    "free_max_boxes": 10,  
-    "vip_max_boxes": 10    
-}
-
 promocodes = { "START2026": {"amount": 1000, "limit": 10, "used_count": 0} }
 
 # ==================== DATABASE ====================
@@ -60,6 +54,7 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
+    cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     conn.commit()
     conn.close()
 
@@ -67,6 +62,26 @@ init_db()
 
 def get_db_connection():
     return sqlite3.connect('bot_database.db', check_same_thread=False)
+
+def get_max_boxes(box_type):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT value FROM settings WHERE key = ?', (box_type,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return int(row[0])
+    else:
+        default_val = 10
+        set_max_boxes(box_type, default_val)
+        return default_val
+
+def set_max_boxes(box_type, val):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (box_type, str(val)))
+    conn.commit()
+    conn.close()
 
 def get_user_balance(user_id):
     conn = get_db_connection()
@@ -195,11 +210,14 @@ def send_admin_panel(chat_id):
     total_users = cursor.fetchone()[0]
     conn.close()
 
+    free_max = get_max_boxes("free_max_boxes")
+    vip_max = get_max_boxes("vip_max_boxes")
+
     bot.send_message(
         chat_id, 
         f"👨‍💻 **Admin Panel**\n\n👥 Jami foydalanuvchilar: {total_users} ta\n"
-        f"📦 Tekin qutilar: {box_settings['free_max_boxes']} ta\n"
-        f"💎 VIP qutilar: {box_settings['vip_max_boxes']} ta\n"
+        f"📦 Tekin qutilar: {free_max} ta\n"
+        f"💎 VIP qutilar: {vip_max} ta\n"
         f"💎 VIP narxi: {PAID_PRICE} so'm", 
         reply_markup=markup, 
         parse_mode="Markdown"
@@ -323,7 +341,7 @@ def handle_menu(message):
         elif state == "set_free_max_boxes":
             user_state[user_id] = None
             if text.isdigit():
-                box_settings["free_max_boxes"] = int(text)
+                set_max_boxes("free_max_boxes", int(text))
                 bot.send_message(message.chat.id, f"✅ Tekin sandiqlar soni {text} ta qilindi.")
             else:
                 bot.send_message(message.chat.id, "❌ Noto'g'ri format!")
@@ -333,7 +351,7 @@ def handle_menu(message):
         elif state == "set_vip_max_boxes":
             user_state[user_id] = None
             if text.isdigit():
-                box_settings["vip_max_boxes"] = int(text)
+                set_max_boxes("vip_max_boxes", int(text))
                 bot.send_message(message.chat.id, f"✅ VIP sandiqlar soni {text} ta qilindi.")
             else:
                 bot.send_message(message.chat.id, "❌ Noto'g'ri format!")
@@ -383,6 +401,8 @@ def handle_menu(message):
 
     elif text == "🎁 Tekin sandiq":
         user_state[user_id] = None
+        free_max = get_max_boxes("free_max_boxes")
+        
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT box_num, prize FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
@@ -392,14 +412,14 @@ def handle_menu(message):
 
         markup = types.InlineKeyboardMarkup(row_width=5)
         buttons = []
-        for i in range(1, box_settings["free_max_boxes"] + 1):
+        for i in range(1, free_max + 1):
             if i in opened_dict:
                 p = opened_dict[i]
                 buttons.append(types.InlineKeyboardButton(f"✅ {i}" if p != "Bo'sh" else f"❌ {i}", callback_data=f"opened_box_info_{p}" if p != "Bo'sh" else "opened_box_empty"))
             else:
                 buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
         markup.add(*buttons)
-        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Jami: {box_settings['free_max_boxes']} ta):", reply_markup=markup)
+        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Jami: {free_max} ta):", reply_markup=markup)
         return
 
     elif text == "💎 VIP (Pullik) sandiq":
@@ -408,6 +428,7 @@ def handle_menu(message):
         if bal < PAID_PRICE:
             bot.send_message(message.chat.id, f"❌ Balans yetarli emas! VIP narxi: {PAID_PRICE} so'm")
         else:
+            vip_max = get_max_boxes("vip_max_boxes")
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('SELECT box_num, prize FROM vip_opened_boxes WHERE user_id = ?', (user_id,))
@@ -417,14 +438,14 @@ def handle_menu(message):
 
             markup = types.InlineKeyboardMarkup(row_width=5)
             buttons = []
-            for i in range(1, box_settings["vip_max_boxes"] + 1):
+            for i in range(1, vip_max + 1):
                 if i in vip_dict:
                     p = vip_dict[i]
                     buttons.append(types.InlineKeyboardButton(f"✅ {i}" if p != "Bo'sh" else f"❌ {i}", callback_data=f"vip_opened_info_{p}" if p != "Bo'sh" else "vip_opened_empty"))
                 else:
                     buttons.append(types.InlineKeyboardButton(f"💎 {i}", callback_data=f"vip_box_{i}"))
             markup.add(*buttons)
-            bot.send_message(message.chat.id, f"💎 VIP sandiqlar (Jami: {box_settings['vip_max_boxes']} ta):", reply_markup=markup)
+            bot.send_message(message.chat.id, f"💎 VIP sandiqlar (Jami: {vip_max} ta):", reply_markup=markup)
         return
 
     elif text == "➕ Hisobni to'ldirish":
@@ -528,24 +549,28 @@ def handle_menu(message):
 
     if text == "Tekin qutilar sonini o'zgartirish" and user_id == ADMIN_ID:
         user_state[user_id] = "set_free_max_boxes"
-        bot.send_message(message.chat.id, f"Hozirgi tekin qutilar soni: {box_settings['free_max_boxes']} ta. Yangi sonini kiriting:")
+        curr = get_max_boxes("free_max_boxes")
+        bot.send_message(message.chat.id, f"Hozirgi tekin qutilar soni: {curr} ta. Yangi sonini kiriting:")
         return
 
     if text == "VIP qutilar sonini o'zgartirish" and user_id == ADMIN_ID:
         user_state[user_id] = "set_vip_max_boxes"
-        bot.send_message(message.chat.id, f"Hozirgi VIP qutilar soni: {box_settings['vip_max_boxes']} ta. Yangi sonini kiriting:")
+        curr = get_max_boxes("vip_max_boxes")
+        bot.send_message(message.chat.id, f"Hozirgi VIP qutilar soni: {curr} ta. Yangi sonini kiriting:")
         return
 
     if text == "Tekin qutilarga sovrin qo'shish" and user_id == ADMIN_ID:
+        free_max = get_max_boxes("free_max_boxes")
         markup = types.InlineKeyboardMarkup(row_width=5)
-        btns = [types.InlineKeyboardButton(f"Quti {i}", callback_data=f"cfg_free_{i}") for i in range(1, box_settings["free_max_boxes"]+1)]
+        btns = [types.InlineKeyboardButton(f"Quti {i}", callback_data=f"cfg_free_{i}") for i in range(1, free_max + 1)]
         markup.add(*btns)
         bot.send_message(message.chat.id, "Qaysi tekin qutiga sovrin yozasiz?", reply_markup=markup)
         return
 
     if text == "VIP qutilarga sovrin qo'shish" and user_id == ADMIN_ID:
+        vip_max = get_max_boxes("vip_max_boxes")
         markup = types.InlineKeyboardMarkup(row_width=5)
-        btns = [types.InlineKeyboardButton(f"VIP {i}", callback_data=f"cfg_vip_{i}") for i in range(1, box_settings["vip_max_boxes"]+1)]
+        btns = [types.InlineKeyboardButton(f"VIP {i}", callback_data=f"cfg_vip_{i}") for i in range(1, vip_max + 1)]
         markup.add(*btns)
         bot.send_message(message.chat.id, "Qaysi VIP qutiga sovrin yozasiz?", reply_markup=markup)
         return
@@ -640,8 +665,9 @@ def callback_handler(call):
 
     if data.startswith("free_box_"):
         box_num = int(data.split("_")[2])
+        free_max = get_max_boxes("free_max_boxes")
         
-        if box_num > box_settings["free_max_boxes"]:
+        if box_num > free_max:
             bot.answer_callback_query(call.id, "❌ Bu quti hozirda mavjud emas!", show_alert=True)
             return
 
@@ -679,8 +705,9 @@ def callback_handler(call):
 
     elif data.startswith("vip_box_"):
         box_num = int(data.split("_")[2])
+        vip_max = get_max_boxes("vip_max_boxes")
         
-        if box_num > box_settings["vip_max_boxes"]:
+        if box_num > vip_max:
             bot.answer_callback_query(call.id, "❌ Bu VIP quti hozirda mavjud emas!", show_alert=True)
             return
 
