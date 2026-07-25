@@ -37,6 +37,7 @@ users_db = set()
 user_balances = {}
 captcha_storage = {}
 user_state = {}
+topup_amounts = {}  # Skrinshot uchun summani alohida saqlaymiz
 
 free_box_prizes = { 3: "500 so'm", 7: "1000 so'm" }
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
@@ -78,7 +79,6 @@ def send_sub_request(chat_id):
 def start_cmd(message):
     user_id = message.from_user.id
     
-    # ESKI VA YANGI FARQI YO'Q: Kanal qo'shilgan bo'lsa, har doim tekshiriladi!
     is_subbed, _ = check_user_sub(user_id)
     if user_id != ADMIN_ID and not is_subbed:
         send_sub_request(message.chat.id)
@@ -151,7 +151,6 @@ def handle_menu(message):
     user_id = message.from_user.id
     text = message.text
 
-    # ESKI VA YANGI FARQI YO'Q: Istalgan xabar yozganda ham homiy obunasi tekshiriladi!
     is_subbed, _ = check_user_sub(user_id)
     if user_id != ADMIN_ID and not is_subbed:
         send_sub_request(message.chat.id)
@@ -177,7 +176,7 @@ def handle_menu(message):
                     "title": ch_title
                 })
                 user_state[user_id] = None
-                bot.send_message(message.chat.id, f"✅ Homiy kanal qo'shildi!\nID/User: `{ch_id}`\nNomi: {ch_title}", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"✅ Homiy kanal qo'shildi!\nID/User: {ch_id}\nNomi: {ch_title}")
             except Exception as e:
                 bot.send_message(message.chat.id, f"❌ Xatolik! Bot bu kanalni topolmadi yoki unga admin emas.\nXatolik: {e}")
             return
@@ -198,7 +197,7 @@ def handle_menu(message):
                 code_amt = int(parts[1])
                 promocodes[code_name] = code_amt
                 user_state[user_id] = None
-                bot.send_message(message.chat.id, f"✅ Promokod qo'shildi!\n\n🎟 Kod: `{code_name}`\n💵 Qiymati: {code_amt} so'm", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"✅ Promokod qo'shildi!\n\n🎟 Kod: {code_name}\n💵 Qiymati: {code_amt} so'm")
             else:
                 bot.send_message(message.chat.id, "❌ Noto'g'ri format! Qaytadan kiriting (Masalan: `YANGI 2000`):")
             return
@@ -289,8 +288,9 @@ def handle_menu(message):
 
     if state == "waiting_topup_amount":
         if text.isdigit():
-            user_state[user_id] = {"state": "waiting_topup_screen", "amount": int(text)}
-            bot.send_message(message.chat.id, f"📸 Endi to'lov cheki (skrinshot) rasmini yuboring:")
+            topup_amounts[user_id] = int(text)
+            user_state[user_id] = "waiting_topup_screen"
+            bot.send_message(message.chat.id, "📸 Endi to'lov cheki (skrinshot) rasmini yuboring:")
         else:
             bot.send_message(message.chat.id, "❌ Faqat raqamda summa kiriting (masalan: 10000):")
         return
@@ -313,7 +313,9 @@ def handle_menu(message):
             message.chat.id, 
             "🔗 **Homiy kanal qo'shish:**\n\n"
             "Kanalning **ID raqami yoki @username** sini yuboring.\n"
-            "*(Masalan: `@kanalim` yoki `-100123456789`)*",
+            "*(Masalan: `@kanalim` yoki `-100123456789`)*\n\n"
+            "Maxsus havola uchun:\n"
+            "`@kanalim | https://t.me/+AbCdEfGh | Kanal Nomi`",
             parse_mode="Markdown"
         )
         return
@@ -387,25 +389,30 @@ def handle_photo(message):
     user_id = message.from_user.id
     state_info = user_state.get(user_id)
 
-    if isinstance(state_info, dict) and state_info.get("state") == "waiting_topup_screen":
-        amount = state_info.get("amount")
+    if state_info == "waiting_topup_screen":
+        amount = topup_amounts.get(user_id, 0)
         photo_id = message.photo[-1].file_id
+        
+        # Holatlarni tozalaymiz
         user_state[user_id] = None
+        if user_id in topup_amounts:
+            del topup_amounts[user_id]
 
         bot.send_message(message.chat.id, "✅ Chekingiz adminga yuborildi!")
 
         admin_markup = types.InlineKeyboardMarkup()
         admin_markup.add(types.InlineKeyboardButton("➕ Balansni tasdiqlash", callback_data=f"approve_topup_{user_id}_{amount}"))
         
-        bot.send_photo(
-            ADMIN_ID,
-            photo_id,
-            caption=f"🔔 **Yangi to'lov cheki!**\n\n"
-                    f"👤 Foydalanuvchi: @{message.from_user.username or 'yoq'} (ID: `{user_id}`)\n"
-                    f"💵 Summa: **{amount} so'm**",
-            parse_mode="Markdown",
-            reply_markup=admin_markup
-        )
+        # Adminga rasm jo'natish
+        try:
+            bot.send_photo(
+                ADMIN_ID,
+                photo_id,
+                caption=f"Yangi to'lov cheki!\n\nFoydalanuvchi ID: {user_id}\nSumma: {amount} so'm",
+                reply_markup=admin_markup
+            )
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ Xatolik yuz berdi: {e}")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -445,13 +452,15 @@ def callback_handler(call):
             user_balances[target_user_id] = amount
 
         bot.answer_callback_query(call.id, "✅ Tasdiqlandi!")
-        bot.edit_message_caption(
-            caption=call.message.caption + "\n\n✅ **HOLAT: Tasdiqlandi va balansga qo'shildi!**",
-            chat_id=call.message.chat.id,
-            message_id=call.message.message_id,
-            parse_Mode="Markdown"
-        )
-        bot.send_message(target_user_id, f"🎉 Tabriklaymiz! To'lovingiz tasdiqlandi va balansingizga **{amount} so'm** qo'shildi.")
+        try:
+            bot.edit_message_caption(
+                caption=call.message.caption + "\n\n[TASDIQLANDI VA BALANSGA QO'SHILDI]",
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id
+            )
+        except:
+            pass
+        bot.send_message(target_user_id, f"🎉 Tabriklaymiz! To'lovingiz tasdiqlandi va balansingizga **{amount} so'm** qo'shildi.", parse_mode="Markdown")
         return
 
     if data.startswith("free_box_"):
@@ -504,7 +513,7 @@ def callback_handler(call):
             bot.edit_message_text(
                 chat_id=call.message.chat.id,
                 message_id=call.message.message_id,
-                text=f"💎 **{box_num}-VIP sandiq** ochildi!\n\nAfsuski, bu sandiq bo'sh chiqdi. Keyingi safar albatta yutasiz! 🍀",
+                text=f"💎 **{box_num}-VIP sandiq** ochildi!\n\nAfsuski, bu VIP sandiq bo'sh chiqdi. Keyingi safar albatta yutasiz! 🍀",
                 parse_mode="Markdown"
             )
 
