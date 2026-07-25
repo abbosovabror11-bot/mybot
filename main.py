@@ -400,8 +400,28 @@ def handle_menu(message):
             bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! **{DAILY_BONUS} so'm** qo'shildi! 💰", parse_mode="Markdown")
         return
 
-    elif text == "🎁 Tekin sandiq":
+        elif text == "🎁 Tekin sandiq":
         user_state[user_id] = None
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT prize FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
+        opened = cursor.fetchone()
+        conn.close()
+
+        if opened:
+            bot.send_message(message.chat.id, f"❌ Siz allaqachon tekin sandiq ochgansiz! Yutug'ingiz: **{opened[0]}**", parse_mode="Markdown")
+            return
+
+        free_max = get_max_boxes("free_max_boxes")
+        markup = types.InlineKeyboardMarkup(row_width=5)
+        buttons = []
+        for i in range(1, free_max + 1):
+            buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
+        markup.add(*buttons)
+        bot.send_message(message.chat.id, f"🎁 Tekin sandiqni tanlang (Faqat 1 marta ochish mumkin):", reply_markup=markup)
+        return
+
         
         conn = get_db_connection()
         cursor = conn.cursor()
