@@ -52,7 +52,8 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
+    # Tekin sandiq bitta odam uchun jami 1 ta qilib o'zgartirildi:
+    cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free_boxes (user_id INTEGER PRIMARY KEY, prize TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     conn.commit()
@@ -401,25 +402,24 @@ def handle_menu(message):
 
     elif text == "🎁 Tekin sandiq":
         user_state[user_id] = None
-        free_max = get_max_boxes("free_max_boxes")
         
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT box_num, prize FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
-        opened_rows = cursor.fetchall()
+        cursor.execute('SELECT prize FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
+        opened = cursor.fetchone()
         conn.close()
-        opened_dict = {row[0]: row[1] for row in opened_rows}
 
+        if opened:
+            bot.send_message(message.chat.id, f"❌ Siz allaqachon tekin sandiq ochgansiz! Yutug'ingiz: **{opened[0]}**", parse_mode="Markdown")
+            return
+
+        free_max = get_max_boxes("free_max_boxes")
         markup = types.InlineKeyboardMarkup(row_width=5)
         buttons = []
         for i in range(1, free_max + 1):
-            if i in opened_dict:
-                p = opened_dict[i]
-                buttons.append(types.InlineKeyboardButton(f"✅ {i}" if p != "Bo'sh" else f"❌ {i}", callback_data=f"opened_box_info_{p}" if p != "Bo'sh" else "opened_box_empty"))
-            else:
-                buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
+            buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
         markup.add(*buttons)
-        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Jami: {free_max} ta):", reply_markup=markup)
+        bot.send_message(message.chat.id, f"🎁 Tekin sandiqni tanlang (Faqat 1 marta ochish mumkin):", reply_markup=markup)
         return
 
     elif text == "💎 VIP (Pullik) sandiq":
@@ -673,20 +673,18 @@ def callback_handler(call):
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM user_opened_free_boxes WHERE user_id = ? AND box_num = ?', (user_id, box_num))
-        opened = cursor.fetchone()
-        conn.close()
+        cursor.execute('SELECT 1 FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
+        already_opened = cursor.fetchone()
 
-        if opened:
-            bot.answer_callback_query(call.id, "❌ Siz bu tekin qutini allaqachon ochgansiz!", show_alert=True)
+        if already_opened:
+            conn.close()
+            bot.answer_callback_query(call.id, "❌ Siz allaqachon tekin sandiq ochgansiz!", show_alert=True)
             return
 
         prize = free_box_prizes.get(box_num)
         prize_text = prize if prize else "Bo'sh"
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO user_opened_free_boxes (user_id, box_num, prize) VALUES (?, ?, ?)', (user_id, box_num, prize_text))
+        cursor.execute('INSERT INTO user_opened_free_boxes (user_id, prize) VALUES (?, ?)', (user_id, prize_text))
         conn.commit()
         conn.close()
 
