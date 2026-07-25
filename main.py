@@ -44,10 +44,9 @@ vip_cooldowns = {}
 free_box_prizes = { 3: "500 so'm", 7: "1000 so'm" }
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
 
-# ALOHIDA QUTI QISMLARI
 box_settings = { 
-    "free_max_boxes": 10,  # Tekin qutilar soni
-    "vip_max_boxes": 10    # VIP qutilar soni
+    "free_max_boxes": 10,  
+    "vip_max_boxes": 10    
 }
 
 promocodes = { "START2026": {"amount": 1000, "limit": 10, "used_count": 0} }
@@ -59,7 +58,10 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS global_opened_boxes (box_num INTEGER PRIMARY KEY, prize TEXT, opened_by INTEGER)')
+    
+    # Global eski jadval o'rniga foydalanuvchiga moslashtirilgani ishlatiladi
+    cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
+    
     cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     conn.commit()
     conn.close()
@@ -386,7 +388,7 @@ def handle_menu(message):
         user_state[user_id] = None
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT box_num, prize FROM global_opened_boxes')
+        cursor.execute('SELECT box_num, prize FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
         opened_rows = cursor.fetchall()
         conn.close()
         opened_dict = {row[0]: row[1] for row in opened_rows}
@@ -641,14 +643,16 @@ def callback_handler(call):
 
     if data.startswith("free_box_"):
         box_num = int(data.split("_")[2])
+        
+        # Foydalanuvchi bu tekin qutini oldin ochganmi tekshiramiz
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM global_opened_boxes WHERE box_num = ?', (box_num,))
+        cursor.execute('SELECT 1 FROM user_opened_free_boxes WHERE user_id = ? AND box_num = ?', (user_id, box_num))
         opened = cursor.fetchone()
         conn.close()
 
         if opened:
-            bot.answer_callback_query(call.id, "❌ Bu quti ochilgan!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Siz bu tekin qutini allaqachon ochgansiz!", show_alert=True)
             return
 
         prize = free_box_prizes.get(box_num)
@@ -656,7 +660,7 @@ def callback_handler(call):
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO global_opened_boxes (box_num, prize, opened_by) VALUES (?, ?, ?)', (box_num, prize_text, user_id))
+        cursor.execute('INSERT OR REPLACE INTO user_opened_free_boxes (user_id, box_num, prize) VALUES (?, ?, ?)', (user_id, box_num, prize_text))
         conn.commit()
         conn.close()
 
