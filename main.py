@@ -39,7 +39,7 @@ captcha_storage = {}
 user_state = {}
 topup_amounts = {}
 last_daily_bonus = {}
-vip_cooldowns = {}      # VIP sandiq uchun 3 daqiqalik vaqtni saqlash
+vip_cooldowns = {}      
 
 free_box_prizes = { 3: "500 so'm", 7: "1000 so'm" }
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
@@ -71,12 +71,21 @@ def init_db():
             code TEXT
         )
     ''')
-    # Faqat tekin qutilar uchun global jadval (hamma bir xil ko'radi)
+    # Tekin qutilar uchun global jadval (hamma uchun umumiy)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS global_opened_boxes (
             box_num INTEGER PRIMARY KEY,
             prize TEXT,
             opened_by INTEGER
+        )
+    ''')
+    # VIP qutilar uchun har bir foydalanuvchiga alohida jadval
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS vip_opened_boxes (
+            user_id INTEGER,
+            box_num INTEGER,
+            prize TEXT,
+            PRIMARY KEY (user_id, box_num)
         )
     ''')
     conn.commit()
@@ -462,11 +471,27 @@ def handle_menu(message):
         if bal < PAID_PRICE:
             bot.send_message(message.chat.id, f"❌ Balansingizda yetarli pul yo'q!\n\nVIP sandiq narxi: {PAID_PRICE} so'm\nSizda: {bal} so'm")
         else:
-            # VIP uchun oddiy tugmalar (har safar ochish mumkin)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT box_num, prize FROM vip_opened_boxes WHERE user_id = ?', (user_id,))
+            vip_opened = cursor.fetchall()
+            conn.close()
+
+            vip_dict = {row[0]: row[1] for row in vip_opened}
+
             markup = types.InlineKeyboardMarkup(row_width=5)
-            buttons = [types.InlineKeyboardButton(f"💎 {i}", callback_data=f"vip_box_{i}") for i in range(1, box_settings["max_boxes"] + 1)]
+            buttons = []
+            for i in range(1, box_settings["max_boxes"] + 1):
+                if i in vip_dict:
+                    p = vip_dict[i]
+                    if p != "Bo'sh":
+                        buttons.append(types.InlineKeyboardButton(f"✅ {i}", callback_data=f"vip_opened_info_{p}"))
+                    else:
+                        buttons.append(types.InlineKeyboardButton(f"❌ {i}", callback_data="vip_opened_empty"))
+                else:
+                    buttons.append(types.InlineKeyboardButton(f"💎 {i}", callback_data=f"vip_box_{i}"))
             markup.add(*buttons)
-            bot.send_message(message.chat.id, f"💎 VIP sandiq narxi: {PAID_PRICE} so'm.\n(Bu yerda istagancha ochishingiz mumkin, har bir ochish oralig'i 3 daqiqa).\nO'zingizga yoqqan raqamni tanlang:", reply_markup=markup)
+            bot.send_message(message.chat.id, f"💎 VIP sandiq narxi: {PAID_PRICE} so'm.\n(Ochish oralig'i: 5 soniya). O'zingizga yoqqan raqamni tanlang:", reply_markup=markup)
         return
 
     elif text == "➕ Hisobni to'ldirish":
@@ -645,11 +670,11 @@ def callback_handler(call):
     data = call.data
     username = f"@{call.from_user.username}" if call.from_user.username else f"ID: {user_id}"
 
-    if data == "opened_box_empty":
+    if data == "opened_box_empty" or data == "vip_opened_empty":
         bot.answer_callback_query(call.id, "❌ Bu quti allaqachon ochilgan va bo'sh chiqqan!", show_alert=True)
         return
 
-    if data.startswith("opened_box_info_"):
+    if data.startswith("opened_box_info_") or data.startswith("vip_opened_info_"):
         prize_name = data.split("_", 3)[3]
         bot.answer_callback_query(call.id, f"✅ Bu quti ochilgan! Yutuq: {prize_name}", show_alert=True)
         return
@@ -719,7 +744,6 @@ def callback_handler(call):
         conn.close()
 
         if prize:
-            update_user_balance(user_id, 0) # Agar tekin sovrin pul bo'lsa, balansga qo'shish kerak bo'lsa shu yerda yoziladi
             add_history(user_id, prize, f"{box_num}-tekin sandiq")
             bot.answer_callback_query(call.id, f"🎉 Tabriklaymiz! Sovrin yutdingiz!")
             bot.edit_message_text(
@@ -749,14 +773,12 @@ def callback_handler(call):
     elif data.startswith("vip_box_"):
         box_num = int(data.split("_")[2])
         
-        # 3 daqiqalik (180 soniya) koldown tekshiruvi
+        # 5 sekundlik koldown tekshiruvi
         current_time = time.time()
         last_vip_time = vip_cooldowns.get(user_id, 0)
-        if current_time - last_vip_time < 180:
-            remaining_sec = int(180 - (current_time - last_vip_time))
-            mins = remaining_sec // 60
-            secs = remaining_sec % 60
-            bot.answer_callback_query(call.id, f"⏳ Iltimos kuting! Keyingi VIP sandiq ochishgacha: {mins}m {secs}s qoldi.", show_alert=True)
+        if current_time - last_vip_time < 5:
+            remaining_sec = int(5 - (current_time - last_vip_time))
+            bot.answer_callback_query(call.id, f"⏳ Iltimos kuting! Yana {remaining_sec} sekund qoldi.", show_alert=True)
             return
 
         bal = get_user_balance(user_id)
@@ -764,11 +786,18 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "❌ Balansingiz yetmadi!", show_alert=True)
             return
 
-        # Pulni yechamiz va vaqtni yangilaymiz
+        # Pulni yechamiz va vaqtni yangilaymiz (5 sekund)
         update_user_balance(user_id, -PAID_PRICE)
         vip_cooldowns[user_id] = current_time
 
         prize = vip_box_prizes.get(box_num)
+        prize_text = prize if prize else "Bo'sh"
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('INSERT OR REPLACE INTO vip_opened_boxes (user_id, box_num, prize) VALUES (?, ?, ?)', (user_id, box_num, prize_text))
+        conn.commit()
+        conn.close()
 
         if prize:
             add_history(user_id, prize, f"{box_num}-VIP sandiq")
