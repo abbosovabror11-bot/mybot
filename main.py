@@ -29,7 +29,7 @@ CARD_NAME = "Abbosov Abrorbek"
 
 bot = telebot.TeleBot(TOKEN)
 
-CHANNEL_USERNAME = "@latareya_channel"
+CHANNEL_USERNAME = @latareya_channel
 PAID_PRICE = 5000  # VIP sandiq boshlang'ich narxi
 
 # Bazalar
