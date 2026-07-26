@@ -52,7 +52,13 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS global_opened_free_boxes (box_num INTEGER PRIMARY KEY, user_id INTEGER, prize TEXT)')
+    
+    # 1) Har bir foydalanuvchi faqat 1 marta tekin quti ochgani uchun
+    cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free (user_id INTEGER PRIMARY KEY, box_num INTEGER, prize TEXT)')
+    
+    # 2) Qaysi qutilar umumiy ochilgani (boshqalar kira olmasligi uchun)
+    cursor.execute('CREATE TABLE IF NOT EXISTS global_opened_free_boxes (box_num INTEGER PRIMARY KEY, user_id INTEGER)')
+    
     cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     conn.commit()
@@ -209,8 +215,7 @@ def send_admin_panel(chat_id):
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM users')
     total_users = cursor.fetchone()[0]
-    
-    cursor.execute('SELECT COUNT(*) FROM global_opened_free_boxes')
+    cursor.execute('SELECT COUNT(*) FROM user_opened_free')
     opened_free_count = cursor.fetchone()[0]
     conn.close()
 
@@ -220,7 +225,7 @@ def send_admin_panel(chat_id):
     bot.send_message(
         chat_id, 
         f"👨‍💻 **Admin Panel**\n\n👥 Jami foydalanuvchilar: {total_users} ta\n"
-        f"📦 Tekin qutilar: {free_max} ta (Ochilganlari: {opened_free_count} ta)\n"
+        f"📦 Tekin quti ochganlar: {opened_free_count} kishi\n"
         f"💎 VIP qutilar: {vip_max} ta\n"
         f"💎 VIP narxi: {PAID_PRICE} so'm", 
         reply_markup=markup, 
@@ -240,10 +245,11 @@ def handle_menu(message):
             free_box_prizes.clear()
             conn = get_db_connection()
             cursor = conn.cursor()
+            cursor.execute('DELETE FROM user_opened_free')
             cursor.execute('DELETE FROM global_opened_free_boxes')
             conn.commit()
             conn.close()
-            bot.send_message(message.chat.id, "✅ Tekin sandiqlar noldan yangilandi! Endi barcha qutilar qaytadan ochiq.")
+            bot.send_message(message.chat.id, "✅ Tekin sandiqlar tarixi tozalandi! Endi hamma yana 1 tadan tekin quti ocha oladi.")
             send_admin_panel(message.chat.id)
             return
 
@@ -425,7 +431,7 @@ def handle_menu(message):
         for i in range(1, free_max + 1):
             buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
         markup.add(*buttons)
-        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Jami: {free_max} ta):", reply_markup=markup)
+        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Har bir foydalanuvchi faqat 1 ta ocha oladi):", reply_markup=markup)
         return
 
     elif text == "💎 VIP (Pullik) sandiq":
@@ -631,7 +637,7 @@ def callback_handler(call):
         idx = int(data.split("_")[2])
         if 0 <= idx < len(forced_channels):
             removed = forced_channels.pop(idx)
-            bot.answer_callback_query(call.id, f"✅ O'chirildi: {removed['title']}")
+            bot.answer_callback_query(call.id, "✅ O'chirildi: {removed['title']}")
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="✅ O'chirildi.")
         return
 
@@ -674,11 +680,20 @@ def callback_handler(call):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Bu quti allaqachon boshqa foydalanuvchi tomonidan ochilganligini tekshirish
-        cursor.execute('SELECT user_id FROM global_opened_free_boxes WHERE box_num = ?', (box_num,))
-        opened_row = cursor.fetchone()
+        # 1. Foydalanuvchi allaqachon tekin quti ochganmi?
+        cursor.execute('SELECT box_num FROM user_opened_free WHERE user_id = ?', (user_id,))
+        user_opened = cursor.fetchone()
 
-        if opened_row:
+        if user_opened:
+            conn.close()
+            bot.answer_callback_query(call.id, "❌ Siz allaqachon tekin sandiq ochgansiz!", show_alert=True)
+            return
+
+        # 2. Tanlangan bu qutini boshqa odam oldin ochib qo'yganmi?
+        cursor.execute('SELECT user_id FROM global_opened_free_boxes WHERE box_num = ?', (box_num,))
+        box_taken = cursor.fetchone()
+
+        if box_taken:
             conn.close()
             bot.answer_callback_query(call.id, "❌ Bu qutini allaqachon boshqa foydalanuvchi ochib bo'lgan!", show_alert=True)
             return
@@ -686,8 +701,9 @@ def callback_handler(call):
         prize = free_box_prizes.get(box_num)
         prize_text = prize if prize else "Bo'sh"
 
-        # Global bazaga yozib qo'yamiz (boshqa hech kim ocha olmaydi)
-        cursor.execute('INSERT OR REPLACE INTO global_opened_free_boxes (box_num, user_id, prize) VALUES (?, ?, ?)', (box_num, user_id, prize_text))
+        # Bazaga yozib qo'yamiz: foydalanuvchi quti ochdi va quti global band qilindi
+        cursor.execute('INSERT INTO user_opened_free (user_id, box_num, prize) VALUES (?, ?, ?)', (user_id, box_num, prize_text))
+        cursor.execute('INSERT INTO global_opened_free_boxes (box_num, user_id) VALUES (?, ?)', (box_num, user_id))
         conn.commit()
         conn.close()
 
