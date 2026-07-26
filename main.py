@@ -418,28 +418,38 @@ def handle_menu(message):
             bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! **{DAILY_BONUS} so'm** qo'shildi! 💰", parse_mode="Markdown")
         return
 
-    elif text == "🎁 Tekin sandiq":
+        elif text == "🎁 Tekin sandiq":
         user_state[user_id] = None
-        free_max = get_max_boxes("free_max_boxes")
-
+        
+        # Foydalanuvchi oldin tekin sandiq ochganmi yo'qmi tekshiramiz
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT box_num, prize FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
-        opened_rows = cursor.fetchall()
+        opened_box = cursor.fetchone()
         conn.close()
-        opened_dict = {row[0]: row[1] for row in opened_rows}
 
+        # Agar allaqachon biron-bir tekin sandiq ochgan bo'lsa
+        if opened_box:
+            box_num = opened_box[0]
+            prize = opened_box[1]
+            bot.send_message(
+                message.chat.id, 
+                f"❌ Siz allaqachon tekin sandiq ochgansiz!\n📦 Ochgan sandig'ingiz: {box_num}-sandiq\n🎁 Yutug'ingiz: **{prize}**", 
+                parse_mode="Markdown"
+            )
+            return
+
+        # Hali ochmagan bo'lsa, tekin sandiqlar ro'yxatini chiqaramiz
+        free_max = get_max_boxes("free_max_boxes")
         markup = types.InlineKeyboardMarkup(row_width=5)
         buttons = []
         for i in range(1, free_max + 1):
-            if i in opened_dict:
-                p = opened_dict[i]
-                buttons.append(types.InlineKeyboardButton(f"✅ {i}" if p != "Bo'sh" else f"❌ {i}", callback_data=f"free_opened_info_{p}" if p != "Bo'sh" else "free_opened_empty"))
-            else:
-                buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
+            buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
         markup.add(*buttons)
-        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Jami: {free_max} ta, har biri 1 marta):", reply_markup=markup)
+        bot.send_message(message.chat.id, f"🎁 Tekin sandiqni tanlang (Faqat 1 marta ochish mumkin):", reply_markup=markup)
         return
+
+        
 
     elif text == "💎 VIP (Pullik) sandiq":
         user_state[user_id] = None
