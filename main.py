@@ -41,7 +41,7 @@ topup_amounts = {}
 last_daily_bonus = {}
 vip_cooldowns = {}      
 
-# Tekin va VIP quti sovrinlari (lug'at ko'rinishida)
+# Tekin va VIP quti sovrinlari
 free_box_prizes = {} 
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
 promocodes = { "START2026": {"amount": 1000, "limit": 10, "used_count": 0} }
@@ -53,7 +53,6 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
-    # Tekin qutilar endi VIP kabi quti raqami bilan saqlanadi (user_id, box_num, prize)
     cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
@@ -239,13 +238,13 @@ def handle_menu(message):
         if text == "🔄 Tekin sandiqlarni yangilash":
             user_state[user_id] = None
             global free_box_prizes
-            free_box_prizes.clear() # Barcha sovrinlar tozalanadi va noldan boshlanadi
+            free_box_prizes.clear()
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('DELETE FROM user_opened_free_boxes')
             conn.commit()
             conn.close()
-            bot.send_message(message.chat.id, "✅ Tekin sandiqlar va ularning sovrinlari butunlay tozalandi! Endi qutilarga yangidan sovrinlar yozib chiqishingiz mumkin.")
+            bot.send_message(message.chat.id, "✅ Tekin sandiqlar yangilandi! Barcha foydalanuvchilarga yana 1 tadan tekin sandiq ochish huquqi berildi.")
             send_admin_panel(message.chat.id)
             return
 
@@ -418,28 +417,23 @@ def handle_menu(message):
             bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! **{DAILY_BONUS} so'm** qo'shildi! 💰", parse_mode="Markdown")
         return
 
-        elif text == "🎁 Tekin sandiq":
+    elif text == "🎁 Tekin sandiq":
         user_state[user_id] = None
         
-        # Foydalanuvchi oldin tekin sandiq ochganmi yo'qmi tekshiramiz
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT box_num, prize FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
-        opened_box = cursor.fetchone()
+        cursor.execute('SELECT COUNT(*) FROM user_opened_free_boxes WHERE user_id = ?', (user_id,))
+        opened_count = cursor.fetchone()[0]
         conn.close()
 
-        # Agar allaqachon biron-bir tekin sandiq ochgan bo'lsa
-        if opened_box:
-            box_num = opened_box[0]
-            prize = opened_box[1]
+        if opened_count > 0:
             bot.send_message(
                 message.chat.id, 
-                f"❌ Siz allaqachon tekin sandiq ochgansiz!\n📦 Ochgan sandig'ingiz: {box_num}-sandiq\n🎁 Yutug'ingiz: **{prize}**", 
+                "❌ Siz bu safargi tekin sandiqni allaqachon ochgansiz!\n⏳ Admin sandiqlarni qaytadan yangilashini kuting.", 
                 parse_mode="Markdown"
             )
             return
 
-        # Hali ochmagan bo'lsa, tekin sandiqlar ro'yxatini chiqaramiz
         free_max = get_max_boxes("free_max_boxes")
         markup = types.InlineKeyboardMarkup(row_width=5)
         buttons = []
@@ -448,8 +442,6 @@ def handle_menu(message):
         markup.add(*buttons)
         bot.send_message(message.chat.id, f"🎁 Tekin sandiqni tanlang (Faqat 1 marta ochish mumkin):", reply_markup=markup)
         return
-
-        
 
     elif text == "💎 VIP (Pullik) sandiq":
         user_state[user_id] = None
