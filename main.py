@@ -41,7 +41,6 @@ topup_amounts = {}
 last_daily_bonus = {}
 vip_cooldowns = {}      
 
-# Tekin va VIP quti sovrinlari
 free_box_prizes = {} 
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
 promocodes = { "START2026": {"amount": 1000, "limit": 10, "used_count": 0} }
@@ -53,7 +52,6 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)')
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
-    # Tekin qutilar uchun: har bir box_num faqat bitta bo'lishi kerak (global ochiq qutilar)
     cursor.execute('CREATE TABLE IF NOT EXISTS global_opened_free_boxes (box_num INTEGER PRIMARY KEY, user_id INTEGER, prize TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
@@ -245,7 +243,7 @@ def handle_menu(message):
             cursor.execute('DELETE FROM global_opened_free_boxes')
             conn.commit()
             conn.close()
-            bot.send_message(message.chat.id, "✅ Tekin sandiqlar noldan yangilandi! Endi barcha qutilar qaytadan ochilishi mumkin.")
+            bot.send_message(message.chat.id, "✅ Tekin sandiqlar noldan yangilandi! Endi barcha qutilar qaytadan ochiq.")
             send_admin_panel(message.chat.id)
             return
 
@@ -422,23 +420,12 @@ def handle_menu(message):
         user_state[user_id] = None
         
         free_max = get_max_boxes("free_max_boxes")
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT box_num, prize FROM global_opened_free_boxes')
-        opened_rows = cursor.fetchall()
-        conn.close()
-        opened_dict = {row[0]: row[1] for row in opened_rows}
-
         markup = types.InlineKeyboardMarkup(row_width=5)
         buttons = []
         for i in range(1, free_max + 1):
-            if i in opened_dict:
-                p = opened_dict[i]
-                buttons.append(types.InlineKeyboardButton(f"✅ {i}" if p != "Bo'sh" else f"❌ {i}", callback_data=f"free_opened_info_{p}" if p != "Bo'sh" else "free_opened_empty"))
-            else:
-                buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
+            buttons.append(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}"))
         markup.add(*buttons)
-        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Kim ochsa, o'sha quti yopiladi):", reply_markup=markup)
+        bot.send_message(message.chat.id, f"🎁 Tekin sandiqlar (Jami: {free_max} ta):", reply_markup=markup)
         return
 
     elif text == "💎 VIP (Pullik) sandiq":
@@ -459,8 +446,7 @@ def handle_menu(message):
             buttons = []
             for i in range(1, vip_max + 1):
                 if i in vip_dict:
-                    p = vip_dict[i]
-                    buttons.append(types.InlineKeyboardButton(f"✅ {i}" if p != "Bo'sh" else f"❌ {i}", callback_data=f"vip_opened_info_{p}" if p != "Bo'sh" else "vip_opened_empty"))
+                    buttons.append(types.InlineKeyboardButton(f"🔒 {i}", callback_data="vip_opened_empty"))
                 else:
                     buttons.append(types.InlineKeyboardButton(f"💎 {i}", callback_data=f"vip_box_{i}"))
             markup.add(*buttons)
@@ -637,13 +623,8 @@ def callback_handler(call):
     data = call.data
     username = f"@{call.from_user.username}" if call.from_user.username else f"ID: {user_id}"
 
-    if data in ["free_opened_empty", "vip_opened_empty", "opened_box_empty"]:
-        bot.answer_callback_query(call.id, "❌ Bu quti bo'sh chiqqan yoki allaqachon ochilgan!", show_alert=True)
-        return
-
-    if data.startswith("free_opened_info_") or data.startswith("vip_opened_info_") or data.startswith("opened_box_info_"):
-        prize_name = data.split("_", 3)[3]
-        bot.answer_callback_query(call.id, f"✅ Yutuq: {prize_name}", show_alert=True)
+    if data == "vip_opened_empty":
+        bot.answer_callback_query(call.id, "❌ Bu quti allaqachon ochilgan!", show_alert=True)
         return
 
     if data.startswith("del_ch_") and user_id == ADMIN_ID:
@@ -692,25 +673,25 @@ def callback_handler(call):
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        # Bu quti allaqachon global ochilganmi tekshiramiz
-        cursor.execute('SELECT 1 FROM global_opened_free_boxes WHERE box_num = ?', (box_num,))
-        already_opened = cursor.fetchone()
+        
+        # Bu quti allaqachon boshqa foydalanuvchi tomonidan ochilganligini tekshirish
+        cursor.execute('SELECT user_id FROM global_opened_free_boxes WHERE box_num = ?', (box_num,))
+        opened_row = cursor.fetchone()
 
-        if already_opened:
+        if opened_row:
             conn.close()
-            bot.answer_callback_query(call.id, "❌ Bu qutini boshqa foydalanuvchi allaqachon ochib bo'lgan!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Bu qutini allaqachon boshqa foydalanuvchi ochib bo'lgan!", show_alert=True)
             return
 
         prize = free_box_prizes.get(box_num)
         prize_text = prize if prize else "Bo'sh"
 
-        # Global bazaga saqlaymiz (Endi hech kim buni qayta ocha olmaydi)
+        # Global bazaga yozib qo'yamiz (boshqa hech kim ocha olmaydi)
         cursor.execute('INSERT OR REPLACE INTO global_opened_free_boxes (box_num, user_id, prize) VALUES (?, ?, ?)', (box_num, user_id, prize_text))
         conn.commit()
         conn.close()
 
         if prize:
-            update_user_balance(user_id, 0) # Istasangiz shu yerda pul ham qo'shishingiz mumkin
             add_history(user_id, prize, f"{box_num}-tekin sandiq")
             bot.answer_callback_query(call.id, "🎉 Yutdingiz!")
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"🎉 **{box_num}-sandiq** yutug'i: **{prize}**", parse_mode="Markdown")
@@ -734,8 +715,7 @@ def callback_handler(call):
         current_time = time.time()
         last_vip_time = vip_cooldowns.get(user_id, 0)
         if current_time - last_vip_time < 5:
-            rem = int(5 - (current_time - last_vip_time))
-            bot.answer_callback_query(call.id, "⏳ Kuting! Yana {rem} sekund.", show_alert=True)
+            bot.answer_callback_query(call.id, "⏳ Biroz kuting!", show_alert=True)
             return
 
         bal = get_user_balance(user_id)
