@@ -134,7 +134,7 @@ promocodes = {}
 def init_db():
     conn = sqlite3.connect('bot_database.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0, verified INTEGER DEFAULT 0, referrer INTEGER, joined_date TEXT)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, balance INTEGER DEFAULT 0, verified INTEGER DEFAULT 0, referrer INTEGER, joined_date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS device_locks (device_id TEXT PRIMARY KEY, user_id INTEGER)')
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
@@ -179,19 +179,11 @@ def get_user_balance(user_id):
     if row:
         return row[0]
     else:
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('INSERT OR IGNORE INTO users (user_id, balance, verified, joined_date) VALUES (?, 0, 0, ?)', (user_id, date_str))
-        conn.commit()
-        conn.close()
         return 0
 
 def update_user_balance(user_id, amount):
-    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('INSERT OR IGNORE INTO users (user_id, balance, verified, joined_date) VALUES (?, 0, 0, ?)', (user_id, date_str))
     cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
     conn.commit()
     conn.close()
@@ -227,6 +219,7 @@ def send_sub_request(chat_id):
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     user_id = message.from_user.id
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
     args = message.text.split()
     
     referrer = None
@@ -249,7 +242,7 @@ def start_cmd(message):
     if not row:
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ref_id = referrer if (referrer and referrer != user_id) else None
-        cursor.execute('INSERT INTO users (user_id, balance, verified, referrer, joined_date) VALUES (?, 0, 0, ?, ?)', (user_id, ref_id, date_str))
+        cursor.execute('INSERT INTO users (user_id, username, balance, verified, referrer, joined_date) VALUES (?, ?, 0, 0, ?, ?)', (user_id, username, ref_id, date_str))
         conn.commit()
         
         if ref_id:
@@ -259,6 +252,9 @@ def start_cmd(message):
                 bot.send_message(ref_id, f"🎉 Yangi do'stingiz botga qo'shildi va sizga **{REF_BONUS} so'm** bonus berildi! 🎁", parse_mode="Markdown")
             except:
                 pass
+    else:
+        cursor.execute('UPDATE users SET username = ? WHERE user_id = ?', (username, user_id))
+        conn.commit()
     conn.close()
 
     is_subbed, _ = check_user_sub(user_id)
@@ -309,12 +305,6 @@ def handle_promo_activation(message, user_id, code):
             add_history(user_id, f"{amt} so'm", f"Promokod ({code})")
             bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Balansga **{amt} so'm** qo'shildi!", parse_mode="Markdown")
             update_channel_promo_message(code)
-
-            user_name = f"@{message.from_user.username}" if message.from_user.username else f"ID: {user_id}"
-            try:
-                bot.send_message(ADMIN_ID, f"🔔 **Yangi promokod ishlatildi!**\n\n👤 Foydalanuvchi: {user_name} (`{user_id}`)\n🔑 Kod: `{code}`\n💰 Miqdor: {amt} so'm\n📊 Limit: {p_info['used_count']}/{p_info['limit']}", parse_mode="Markdown")
-            except:
-                pass
     else:
         bot.send_message(message.chat.id, "❌ Promokod topilmadi!")
     send_main_menu(message.chat.id, user_id)
@@ -357,7 +347,7 @@ def send_main_menu(chat_id, user_id):
     markup.add(types.KeyboardButton("💰 Mening balansim"), types.KeyboardButton("➕ Hisobni to'ldirish"))
     markup.add(types.KeyboardButton("💸 Pulni yechib olish"), types.KeyboardButton("👥 Referal tizimi"))
     markup.add(types.KeyboardButton("🎟 Promokod"), types.KeyboardButton("🎁 Kundalik bonus"))
-    markup.add(types.KeyboardButton("📜 Mening yutuqlarim"))
+    markup.add(types.KeyboardButton("📜 Mening yutuqlarim"), types.KeyboardButton("🏆 TOP-10 Odam qo'shganlar"))
     if user_id == ADMIN_ID:
         markup.add(types.KeyboardButton("👨‍💻 Admin Panel"))
     bot.send_message(chat_id, "🎉 Asosiy menyu:", reply_markup=markup)
@@ -375,18 +365,12 @@ def send_admin_panel(chat_id):
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM users')
     total_users = cursor.fetchone()[0]
-    cursor.execute('SELECT COUNT(*) FROM user_opened_free')
-    opened_free_count = cursor.fetchone()[0]
     conn.close()
-
-    vip_max = get_max_boxes("vip_max_boxes")
 
     bot.send_message(
         chat_id, 
         f"👨‍💻 **Admin Panel**\n\n👥 Jami foydalanuvchilar: {total_users} ta\n"
-        f"📦 Tekin quti ochganlar: {opened_free_count} kishi\n"
-        f"💎 VIP qutilar: {vip_max} ta\n"
-        f"🎁 Referal bonus: {REF_BONUS} so'm\n"
+        f"🎁 Hozirgi Referal bonus qiymati: **{REF_BONUS} so'm**\n"
         f"💎 VIP narxi: {PAID_PRICE} so'm", 
         reply_markup=markup, 
         parse_mode="Markdown"
@@ -401,7 +385,6 @@ def handle_menu(message):
     if user_id == ADMIN_ID:
         if text == "🔄 Tekin sandiqlarni yangilash":
             user_state[user_id] = None
-            global free_box_prizes
             free_box_prizes.clear()
             conn = get_db_connection()
             cursor = conn.cursor()
@@ -560,6 +543,28 @@ def handle_menu(message):
         bot.send_message(message.chat.id, f"👥 **Referal Tizimi**\n\nDo'stlaringizni taklif qiling va har biri uchun **{REF_BONUS} so'm** oling!\n\n🔗 Sizning havolangiz:\n`{ref_link}`\n\n📊 Taklif qilgan do'stlaringiz: {ref_count} ta", parse_mode="Markdown")
         return
 
+    elif text == "🏆 TOP-10 Odam qo'shganlar":
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT u.username, COUNT(r.user_id) as ref_count 
+            FROM users u 
+            LEFT JOIN users r ON r.referrer = u.user_id 
+            GROUP BY u.user_id 
+            ORDER BY ref_count DESC 
+            LIMIT 10
+        ''')
+        top_refs = cursor.fetchall()
+        conn.close()
+
+        top_text = "🏆 **TOP-10 Odam qo'shgan eng faol foydalanuvchilar:**\n\n"
+        for idx, (uname, count) in enumerate(top_refs, 1):
+            name = uname if uname else f"Foydalanuvchi"
+            top_text += f"{idx}. {name} — **{count}** ta do'st\n"
+        
+        bot.send_message(message.chat.id, top_text, parse_mode="Markdown")
+        return
+
     elif text == "💸 Pulni yechib olish":
         user_state[user_id] = "waiting_withdraw_card"
         bot.send_message(message.chat.id, "💳 Pulni yechib olish uchun **Karta raqamingizni** kiriting (masalan: `8600...`):", parse_mode="Markdown")
@@ -683,7 +688,7 @@ def handle_menu(message):
         return
     if text == "👥 Referal bonusini o'zgartirish" and user_id == ADMIN_ID:
         user_state[user_id] = "set_ref_bonus"
-        bot.send_message(message.chat.id, "Yangi referal bonus miqdorini kiriting:")
+        bot.send_message(message.chat.id, f"Hozirgi referal bonus: {REF_BONUS} so'm. Yangi qiymatini kiriting:")
         return
     if text == "🎟 Promokod qo'shish" and user_id == ADMIN_ID:
         user_state[user_id] = "add_promo_code"
@@ -733,37 +738,14 @@ def handle_menu(message):
         cursor.execute('SELECT COUNT(*), SUM(balance) FROM users')
         u_count, total_bal = cursor.fetchone()
         total_bal = total_bal if total_bal else 0
-
-        now = datetime.now()
-        d_1 = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
-        d_7 = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-        d_30 = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
-
-        cursor.execute('SELECT COUNT(*) FROM users WHERE joined_date >= ?', (d_1,))
-        day_1 = cursor.fetchone()[0]
-        cursor.execute('SELECT COUNT(*) FROM users WHERE joined_date >= ?', (d_7,))
-        day_7 = cursor.fetchone()[0]
-        cursor.execute('SELECT COUNT(*) FROM users WHERE joined_date >= ?', (d_30,))
-        day_30 = cursor.fetchone()[0]
-
-        cursor.execute('SELECT COUNT(DISTINCT user_id) FROM history WHERE prize != "Bo\'sh"')
-        gift_winners = cursor.fetchone()[0]
-
-        cursor.execute('SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 5')
-        top_users = cursor.fetchall()
         conn.close()
 
         stat_text = (
             f"📊 **To'liq Statistika**\n\n"
             f"👥 Jami foydalanuvchilar: {u_count} ta\n"
-            f"💰 Jami balanslar: {total_bal} so'm\n\n"
-            f"📈 **Aktivlik:**\n"
-            f"• 1 kunda: {day_1} ta\n• 7 kunda: {day_7} ta\n• 1 oyda: {day_30} ta\n\n"
-            f"🎁 Sovrin yutganlar: {gift_winners} kishi\n\n"
-            f"🏆 **TOP 5 Foydalanuvchi:**\n"
+            f"💰 Jami balanslar: {total_bal} so'm\n"
+            f"🎁 Referal bonus qiymati: {REF_BONUS} so'm\n"
         )
-        for idx, tu in enumerate(top_users, 1):
-            stat_text += f"{idx}. ID: `{tu[0]}` — {tu[1]} so'm\n"
         bot.send_message(message.chat.id, stat_text, parse_mode="Markdown")
         return
     if text == "🚪 Menuga qaytish":
@@ -792,7 +774,7 @@ def callback_handler(call):
     if data.startswith("del_ch_") and user_id == ADMIN_ID:
         idx = int(data.split("_")[2])
         if 0 <= idx < len(forced_channels):
-            removed = forced_channels.pop(idx)
+            forced_channels.pop(idx)
             bot.answer_callback_query(call.id, f"✅ O'chirildi")
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="✅ O'chirildi.")
         return
