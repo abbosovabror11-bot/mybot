@@ -125,7 +125,6 @@ REF_BONUS = 500
 user_state = {}
 topup_amounts = {}
 last_daily_bonus = {}
-vip_cooldowns = {}      
 
 free_box_prizes = {} 
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
@@ -276,8 +275,7 @@ def start_cmd(message):
 
     if not is_verified and user_id != ADMIN_ID:
         markup = types.InlineKeyboardMarkup()
-        # Render'dagi web app havolangizni shu yerga yozasiz
-        webapp_url = "https://sandiqcha-bot.onrender.com" 
+        webapp_url = "https://mybot-1-a5nq.onrender.com" 
         markup.add(types.InlineKeyboardButton("🛡 Xavfsizlik tekshiruvidan o'tish", web_app=types.WebAppInfo(url=webapp_url)))
         bot.send_message(message.chat.id, "🤖 Botdan foydalanish uchun qurilmangizni tasdiqlang (Har bir telefondan faqat 1 ta akkaunt ruxsat etiladi):", reply_markup=markup)
         return
