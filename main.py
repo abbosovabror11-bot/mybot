@@ -1,867 +1,282 @@
-from flask import Flask, render_template_string, request, jsonify
-import threading
-import os
-import telebot
-from telebot import types
-import random
-import time
-import sqlite3
+import asyncio
+import logging
 from datetime import datetime, timedelta
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# ==================== FLASK SERVER (MINI APP) ====================
-app = Flask(__name__)
+# ==========================================
+# SOZLAMALAR
+# ==========================================
+TOKEN = "8860310673:AAGjR_4nY3fiNR5D_WCX4J1bLZvG5zUBZ7c"      # BotFather dan olgan tokeningiz
+ADMIN_ID = 8694110588          # Sizning Telegram ID raqamingiz
 
-MINI_APP_HTML = """
-<!DOCTYPE html>
-<html lang="uz">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Xavfsizlik tekshiruvi</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <style>
-        body { font-family: Arial, sans-serif; background: #0f172a; color: #fff; text-align: center; padding: 20px; }
-        .card { background: #1e293b; padding: 20px; border-radius: 12px; margin-top: 50px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
-        button { background: #3b82f6; color: white; border: none; padding: 12px 20px; border-radius: 8px; font-size: 16px; cursor: pointer; margin-top: 15px; width: 100%; }
-        button:hover { background: #2563eb; }
-        .error { color: #ef4444; font-weight: bold; margin-top: 15px; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2>🛡 Xavfsizlik Tekshiruvi</h2>
-        <p>Botdan foydalanish uchun qurilmangizni tasdiqlang (Har bir telefondan faqat 1 ta akkaunt ruxsat etiladi).</p>
-        <div id="msg" class="error"></div>
-        <button onclick="verifyDevice()">Tasdiqlash va Kirish</button>
-    </div>
+logging.basicConfig(level=logging.INFO)
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
-    <script>
-        const tg = window.Telegram.WebApp;
-        tg.expand();
+# Xotirada bazani simulyatsiya qilish (Professional loyihada PostgreSQL ishlatiladi)
+channels_db = set()           # Bot admin bo'lgan kanallar ID lari
+channel_names = {}            # Kanal ID -> Nomi
+users_db = set()              # Botdan foydalangan barcha foydalanuvchilar (ID va qo'shilgan vaqti)
+users_joined_time = {}        # User_id -> datetime (Statistika uchun)
+channel_usage_count = {}      # Top 10 kanallar uchun faollik
+forced_channels = []          # Majburiy obuna uchun kanallar ro'yxati (masalan: ["@kanalusername"])
 
-        function verifyDevice() {
-            let deviceId = localStorage.getItem('sandiq_device_id');
-            if (!deviceId) {
-                deviceId = 'dev_' + Math.random().toString(36).substring(2) + Date.now();
-                localStorage.setItem('sandiq_device_id', deviceId);
-            }
 
-            const userId = tg.initDataUnsafe?.user?.id;
-            if (!userId) {
-                document.getElementById('msg').innerText = "Telegram foydalanuvchisi aniqlanmadi!";
-                return;
-            }
-
-            fetch('/verify', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: userId, device_id: deviceId })
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.success) {
-                    alert("✅ Muvaffaqiyatli tasdiqlandi!");
-                    tg.close();
-                } else {
-                    document.getElementById('msg').innerText = data.error;
-                }
-            });
-        }
-    </script>
-</body>
-</html>
-"""
-
-@app.route('/')
-def home():
-    return render_template_string(MINI_APP_HTML)
-
-@app.route('/verify', methods=['POST'])
-def verify():
-    data = request.json
-    user_id = data.get('user_id')
-    device_id = data.get('device_id')
-    
-    conn = sqlite3.connect('bot_database.db', check_same_thread=False)
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT user_id FROM device_locks WHERE device_id = ?', (device_id,))
-    row = cursor.fetchone()
-    
-    if row and row[0] != user_id:
-        conn.close()
-        return jsonify({"success": False, "error": "❌ Bu telefondan allaqachon boshqa Telegram akkaunt ro'yxatdan o'tgan!"})
-    
-    cursor.execute('INSERT OR REPLACE INTO device_locks (device_id, user_id) VALUES (?, ?)', (device_id, user_id))
-    cursor.execute('UPDATE users SET verified = 1 WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
-    
-    return jsonify({"success": True})
-
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
-
-threading.Thread(target=run_flask).start()
-# ====================================================
-
-# ==================== SOZLAMALAR ====================
-TOKEN = "8630740028:AAGeLn8RLQczuX75cAay1S3VCRl8omXLHeA"
-ADMIN_ID = 8694110588
-CHANNEL_ID = "@sandiqcha_official"
-
-CARD_NUMBER = "9860606756173831"
-CARD_NAME = "Abbosov Abrorbek"
-# ===================================================
-
-bot = telebot.TeleBot(TOKEN)
-
-forced_channels = []
-PAID_PRICE = 5000
-DAILY_BONUS = 200     
-REF_BONUS = 500       
-
-user_state = {}
-topup_amounts = {}
-last_daily_bonus = {}
-
-free_box_prizes = {} 
-vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
-promocodes = {} 
-
-# ==================== DATABASE ====================
-def init_db():
-    conn = sqlite3.connect('bot_database.db', check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, balance INTEGER DEFAULT 0, verified INTEGER DEFAULT 0, referrer INTEGER, joined_date TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS device_locks (device_id TEXT PRIMARY KEY, user_id INTEGER)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free (user_id INTEGER PRIMARY KEY, box_num INTEGER, prize TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
-    cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
-    conn.commit()
-    conn.close()
-
-init_db()
-
-def get_db_connection():
-    return sqlite3.connect('bot_database.db', check_same_thread=False)
-
-def get_max_boxes(box_type):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT value FROM settings WHERE key = ?', (box_type,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return int(row[0])
-    else:
-        default_val = 10
-        set_max_boxes(box_type, default_val)
-        return default_val
-
-def set_max_boxes(box_type, val):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (box_type, str(val)))
-    conn.commit()
-    conn.close()
-
-def get_user_balance(user_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT balance FROM users WHERE user_id = ?', (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else 0
-
-def update_user_balance(user_id, amount):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
-    conn.commit()
-    conn.close()
-
-def add_history(user_id, prize, box_info):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute('INSERT INTO history (user_id, prize, box_info, date) VALUES (?, ?, ?, ?)', (user_id, prize, box_info, date_str))
-    conn.commit()
-    conn.close()
-# ==================================================
-
-def check_user_sub(user_id):
+# ==========================================
+# MAJBURIY OBUNANI TEKSHIRISH FUNKSIYASI
+# ==========================================
+async def check_subscription(user_id: int) -> bool:
     if not forced_channels:
-        return True, None
-    for ch in forced_channels:
+        return True
+    
+    for channel in forced_channels:
         try:
-            member = bot.get_chat_member(ch["id"], user_id)
-            if member.status not in ['creator', 'administrator', 'member', 'restricted']:
-                return False, ch
+            member = await bot.get_chat_member(chat_id=channel, user_id=user_id)
+            if member.status in ["left", "kicked"]:
+                return False
         except Exception:
-            return False, ch
-    return True, None
+            # Agar botning o'zi majburiy kanalda admin bo'lmasa yoki xatolik bo'lsa
+            pass
+    return True
 
-def send_sub_request(chat_id):
-    markup = types.InlineKeyboardMarkup()
-    for ch in forced_channels:
-        markup.add(types.InlineKeyboardButton(f"📢 {ch.get('title', 'Kanal')}", url=ch["link"]))
-    markup.add(types.InlineKeyboardButton("✅ Obunani tekshirish", callback_data="check_subscription"))
-    bot.send_message(chat_id, "⚠️ Botdan foydalanish uchun homiy kanallarga obuna bo'ling 🔔:", reply_markup=markup)
 
-@bot.message_handler(commands=['start'])
-def start_cmd(message):
+# ==========================================
+# 1. START VA ASOSIY MENYU (MAJBURIY OBUNA BILAN)
+# ==========================================
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message):
     user_id = message.from_user.id
-    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{user_id}"
-    args = message.text.split()
     
-    referrer = None
-    if len(args) > 1:
-        if args[1].startswith("ref_"):
-            try:
-                referrer = int(args[1].replace("ref_", ""))
-            except:
-                pass
-        elif args[1].startswith("promo_"):
-            code = args[1].replace("promo_", "").upper()
-            handle_promo_activation(message, user_id, code)
-            return
+    # Foydalanuvchini bazaga qo'shish va vaqtini saqlash (Statistika uchun)
+    if user_id not in users_db:
+        users_db.add(user_id)
+        users_joined_time[user_id] = datetime.now()
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT user_id, verified FROM users WHERE user_id = ?', (user_id,))
-    row = cursor.fetchone()
+    # Majburiy obunani tekshirish
+    is_subscribed = await check_subscription(user_id)
     
-    if not row:
-        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ref_id = referrer if (referrer and referrer != user_id) else None
-        cursor.execute('INSERT INTO users (user_id, username, balance, verified, referrer, joined_date) VALUES (?, ?, 0, 0, ?, ?)', (user_id, username, ref_id, date_str))
-        conn.commit()
+    builder = InlineKeyboardBuilder()
+    
+    if not is_subscribed:
+        # Agar obuna bo'lmasa, kanallarga obuna bo'lish tugmalarini chiqaramiz
+        for ch in forced_channels:
+            builder.button(text=f"📢 {ch} ga obuna bo'lish", url=f"https://t.me/{ch.replace('@', '')}")
+        builder.button(text="✅ Tekshirish", callback_data="check_sub")
+        builder.adjust(1)
         
-        if ref_id:
-            update_user_balance(ref_id, REF_BONUS)
-            add_history(ref_id, f"{REF_BONUS} so'm", "Referal bonus")
-            try:
-                bot.send_message(ref_id, f"🎉 Yangi do'stingiz botga qo'shildi va sizga **{REF_BONUS} so'm** bonus berildi! 🎁✨", parse_mode="Markdown")
-            except:
-                pass
-    else:
-        cursor.execute('UPDATE users SET username = ? WHERE user_id = ?', (username, user_id))
-        conn.commit()
-    conn.close()
-
-    is_subbed, _ = check_user_sub(user_id)
-    if not is_subbed and user_id != ADMIN_ID:
-        send_sub_request(message.chat.id)
+        await message.answer(
+            "⚠️ **Botdan foydalanish uchun quyidagi kanallarga obuna bo'lishingiz kerak:**\n\n"
+            "Obuna bo'lgach, **✅ Tekshirish** tugmasini bosing.",
+            reply_markup=builder.as_markup()
+        )
         return
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT verified FROM users WHERE user_id = ?', (user_id,))
-    res_v = cursor.fetchone()
-    is_verified = res_v[0] if res_v else 0
-    conn.close()
-
-    if not is_verified and user_id != ADMIN_ID:
-        markup = types.InlineKeyboardMarkup()
-        webapp_url = "https://mybot-1-a5nq.onrender.com" 
-        markup.add(types.InlineKeyboardButton("🛡 Xavfsizlik tekshiruvidan o'tish", web_app=types.WebAppInfo(url=webapp_url)))
-        bot.send_message(message.chat.id, "🤖 Botdan foydalanish uchun qurilmangizni tasdiqlang 📱 (Har bir telefondan faqat 1 ta akkaunt ruxsat etiladi):", reply_markup=markup)
-        return
-
-    send_main_menu(message.chat.id, user_id)
-
-def handle_promo_activation(message, user_id, code):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT 1 FROM used_promos WHERE user_id = ? AND code = ?', (user_id, code))
-    already_used = cursor.fetchone()
-    conn.close()
-
-    if code in promocodes:
-        p_info = promocodes[code]
-        if already_used:
-            bot.send_message(message.chat.id, "❌ Bu promokondan allaqachon foylangansiz! ⚠️")
-        elif p_info["used_count"] >= p_info["limit"]:
-            bot.send_message(message.chat.id, "❌ Bu promokod limiti tugagan! ⏳")
-        else:
-            p_info["used_count"] += 1
-            amt = p_info["amount"]
-            update_user_balance(user_id, amt)
-            
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO used_promos (user_id, code) VALUES (?, ?)', (user_id, code))
-            conn.commit()
-            conn.close()
-            
-            add_history(user_id, f"{amt} so'm", f"Promokod ({code})")
-            bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Balansingizga **{amt} so'm** qo'shildi! 💰🚀", parse_mode="Markdown")
-            update_channel_promo_message(code)
-    else:
-        bot.send_message(message.chat.id, "❌ Bunday promokod topilmadi! 🔍")
-    send_main_menu(message.chat.id, user_id)
-
-def update_channel_promo_message(code):
-    p_info = promocodes.get(code)
-    if not p_info or not p_info.get("msg_id"): return
-    msg_id = p_info["msg_id"]
-    used = p_info["used_count"]
-    limit = p_info["limit"]
-    amt = p_info["amount"]
-
-    if used >= limit:
-        text = f"🎁 **PROMOKOD TUGADI!**\n\n🔑 Promo: `{code}`\n💰 Qiymati: {amt} so'm\n👥 Limit: {limit}/{limit} ❌"
-        markup = None
-    else:
-        text = f"🎁 **YANGI PROMOKOD!**\n\n🔑 Promo: `{code}`\n💰 Qiymati: {amt} so'm\n👥 Limit: {used}/{limit} ✅"
-        markup = types.InlineKeyboardMarkup()
-        bot_username = bot.get_me().username
-        markup.add(types.InlineKeyboardButton("🎁 Promokodni ishlatish", url=f"https://t.me/{bot_username}?start=promo_{code}"))
-    try:
-        bot.edit_message_text(text=text, chat_id=CHANNEL_ID, message_id=msg_id, reply_markup=markup, parse_mode="Markdown")
-    except:
-        pass
-
-@bot.callback_query_handler(func=lambda call: call.data == "check_subscription")
-def callback_check_sub(call):
-    user_id = call.from_user.id
-    is_subbed, _ = check_user_sub(user_id)
-    if is_subbed:
-        bot.answer_callback_query(call.id, "✅ Obuna tasdiqlandi! 🎉")
-        try: bot.delete_message(call.message.chat.id, call.message.message_id) except: pass
-        start_cmd(call.message)
-    else:
-        bot.answer_callback_query(call.id, "❌ Hali hamma kanalga obuna bo'lmadingiz! ⚠️", show_alert=True)
-
-def send_main_menu(chat_id, user_id):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(types.KeyboardButton("🎁 Tekin sandiq"), types.KeyboardButton("💎 VIP (Pullik) sandiq"))
-    markup.add(types.KeyboardButton("💰 Mening balansim"), types.KeyboardButton("➕ Hisobni to'ldirish"))
-    markup.add(types.KeyboardButton("💸 Pulni yechib olish"), types.KeyboardButton("👥 Referal tizimi"))
-    markup.add(types.KeyboardButton("🎟 Promokod"), types.KeyboardButton("🎁 Kundalik bonus"))
-    markup.add(types.KeyboardButton("📜 Mening yutuqlarim"), types.KeyboardButton("🏆 TOP-10 Odam qo'shganlar"))
-    if user_id == ADMIN_ID:
-        markup.add(types.KeyboardButton("👨‍💻 Admin Panel"))
-    bot.send_message(chat_id, "🎉 Asosiy menyuga xush kelibsiz! Kerakli bo'limni tanlang 👇✨", reply_markup=markup)
-
-def send_admin_panel(chat_id):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("📢 Kanal Sozlash", "📋 Kanallar ro'yxati")
-    markup.add("📦 Qutilarni sozlash", "💎 VIP narxini o'zgartirish")
-    markup.add("🎟 Promokod qo'shish", "🎁 Kunlik bonusni o'zgartirish")
-    markup.add("👥 Referal bonusini o'zgartirish", "👤 Foydalanuvchini boshqarish")
-    markup.add("📢 Xabar yuborish (Rassilka)", "🔄 Tekin sandiqlarni yangilash")
-    markup.add("📊 To'liq Statistika", "🚪 Menuga qaytish")
+    # Asosiy menyu
+    builder.row(
+        types.InlineKeyboardButton(text="🎮 O'yinni boshlash", callback_data="start_game"),
+        types.InlineKeyboardButton(text="🏆 Top 10 Kanallar", callback_data="top_channels")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="ℹ️ Bot haqida", callback_data="about_bot")
+    )
     
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM users')
-    total_users = cursor.fetchone()[0]
-    conn.close()
-
-    bot.send_message(
-        chat_id, 
-        f"👨‍💻 **Admin Panel** ⚙️\n\n👥 Jami foydalanuvchilar: {total_users} ta\n"
-        f"🎁 Referal bonus qiymati: **{REF_BONUS} so'm**\n"
-        f"💎 VIP narxi: {PAID_PRICE} so'm", 
-        reply_markup=markup, 
-        parse_mode="Markdown"
+    await message.answer(
+        "👋 **Xush kelibsiz!**\n\n"
+        "Men kanallar uchun maxsus avtomatlashtirilgan interaktiv o'yin va tanlov botiman.\n\n"
+        "✨ **Asosiy imkoniyatlarim:**\n"
+        "• Kanalingizda avtomatlashtirilgan shou va o'yinlar\n"
+        "• Eng faol kanallarning ochiq reytingi (Top 10)\n"
+        "• To'liq qulay boshqaruv menyusi\n\n"
+        "📥 Meni o'z kanalingizga **admin** qilib qo'shing va ishga tushiring!",
+        reply_markup=builder.as_markup()
     )
 
-@bot.message_handler(func=lambda message: True)
-def handle_menu(message):
-    user_id = message.from_user.id
-    text = message.text
-    state = user_state.get(user_id)
 
-    if user_id == ADMIN_ID:
-        if text == "🔄 Tekin sandiqlarni yangilash":
-            user_state[user_id] = None
-            free_box_prizes.clear()
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('DELETE FROM user_opened_free')
-            conn.commit()
-            conn.close()
-            bot.send_message(message.chat.id, "✅ Tekin sandiqlar tarixi tozalandi! 🧹✨")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state == "set_channel":
-            user_state[user_id] = None
-            parts = text.split("|")
-            ch_id = parts[0].strip()
-            ch_link = parts[1].strip() if len(parts) > 1 else f"https://t.me/{ch_id.replace('@', '')}"
-            ch_title = parts[2].strip() if len(parts) > 2 else ch_id
-            try:
-                chat_info = bot.get_chat(ch_id)
-                ch_title = chat_info.title or ch_title
-                forced_channels.append({"id": ch_id, "link": ch_link, "title": ch_title})
-                bot.send_message(message.chat.id, f"✅ Kanal qo'shildi: {ch_title} 📢")
-            except Exception as e:
-                bot.send_message(message.chat.id, f"❌ Xatolik: {e}")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state == "set_ref_bonus":
-            global REF_BONUS
-            user_state[user_id] = None
-            if text.isdigit():
-                REF_BONUS = int(text)
-                bot.send_message(message.chat.id, f"✅ Referal bonus {REF_BONUS} so'm qilindi! 🎁")
-            else:
-                bot.send_message(message.chat.id, "❌ Faqat raqam kiriting.")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state == "set_vip_price":
-            global PAID_PRICE
-            user_state[user_id] = None
-            if text.isdigit():
-                PAID_PRICE = int(text)
-                bot.send_message(message.chat.id, f"✅ VIP narxi {PAID_PRICE} so'm qilindi! 💎")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state == "set_daily_bonus":
-            global DAILY_BONUS
-            user_state[user_id] = None
-            if text.isdigit():
-                DAILY_BONUS = int(text)
-                bot.send_message(message.chat.id, f"✅ Kunlik bonus {DAILY_BONUS} so'm qilindi! 🌟")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state == "add_promo_code":
-            user_state[user_id] = None
-            parts = text.split()
-            if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
-                code_name = parts[0].upper()
-                amt = int(parts[1])
-                lim = int(parts[2])
-                promocodes[code_name] = {"amount": amt, "limit": lim, "used_count": 0, "msg_id": None}
-                try:
-                    bot_username = bot.get_me().username
-                    markup = types.InlineKeyboardMarkup()
-                    markup.add(types.InlineKeyboardButton("🎁 Promokodni ishlatish", url=f"https://t.me/{bot_username}?start=promo_{code_name}"))
-                    sent_msg = bot.send_message(CHANNEL_ID, f"🎁 **YANGI PROMOKOD!**\n\n🔑 Promo: `{code_name}`\n💰 Qiymati: {amt} so'm\n👥 Limit: 0/{lim} ✅", reply_markup=markup, parse_mode="Markdown")
-                    promocodes[code_name]["msg_id"] = sent_msg.message_id
-                    bot.send_message(message.chat.id, "✅ Promokod kanalga tashlandi! 🚀✨")
-                except Exception as e:
-                    bot.send_message(message.chat.id, f"❌ Xatolik: {e}")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state == "broadcast_message":
-            user_state[user_id] = None
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('SELECT user_id FROM users')
-            for row in cursor.fetchall():
-                try: bot.send_message(row[0], text) except: pass
-            conn.close()
-            bot.send_message(message.chat.id, "✅ Xabar barchaga yuborildi! 📢")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state == "manage_user_id":
-            if text.isdigit():
-                target_uid = int(text)
-                user_state[user_id] = {"state": "manage_user_action", "target": target_uid}
-                bot.send_message(message.chat.id, f"Foydalanuvchi ID: {target_uid}\nQancha pul qo'shasiz yoki ayirasiz? (+ yoki - bilan):")
-            else:
-                user_state[user_id] = None
-                bot.send_message(message.chat.id, "❌ Faqat raqamli ID kiriting.")
-                send_admin_panel(message.chat.id)
-            return
-
-        elif isinstance(state, dict) and state.get("state") == "manage_user_action":
-            target_uid = state.get("target")
-            user_state[user_id] = None
-            if text.lstrip('-').isdigit():
-                amount = int(text)
-                update_user_balance(target_uid, amount)
-                new_bal = get_user_balance(target_uid)
-                bot.send_message(message.chat.id, f"✅ Balans o'zgartirildi. Yangi balans: {new_bal} so'm 💰")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state and state.startswith("set_free_box_"):
-            box_num = int(state.split("_")[3])
-            free_box_prizes[box_num] = text.strip()
-            user_state[user_id] = None
-            bot.send_message(message.chat.id, f"✅ Tekin quti ({box_num}) sovrini saqlandi. 📦")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state and state.startswith("set_vip_box_"):
-            box_num = int(state.split("_")[3])
-            vip_box_prizes[box_num] = text.strip()
-            user_state[user_id] = None
-            bot.send_message(message.chat.id, f"✅ VIP quti ({box_num}) sovrini saqlandi. 💎")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state == "set_free_max_boxes":
-            user_state[user_id] = None
-            if text.isdigit():
-                set_max_boxes("free_max_boxes", int(text))
-                bot.send_message(message.chat.id, f"✅ Tekin sandiqlar soni {text} ta qilindi.")
-            send_admin_panel(message.chat.id)
-            return
-
-        elif state == "set_vip_max_boxes":
-            user_state[user_id] = None
-            if text.isdigit():
-                set_max_boxes("vip_max_boxes", int(text))
-                bot.send_message(message.chat.id, f"✅ VIP sandiqlar soni {text} ta qilindi.")
-            send_admin_panel(message.chat.id)
-            return
-
-    # Foydalanuvchi buyruqlari
-    if text == "💰 Mening balansim":
-        bot.send_message(message.chat.id, f"💰 Sizning balansingiz: **{get_user_balance(user_id)} so'm** ✨", parse_mode="Markdown")
+@dp.callback_query(F.data == "check_sub")
+async def process_check_sub(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    is_subscribed = await check_subscription(user_id)
+    
+    if not is_subscribed:
+        await callback.answer("❌ Siz hali hamma kanallarga obuna bo'lmadingiz!", show_alert=True)
         return
-
-    elif text == "👥 Referal tizimi":
-        bot_username = bot.get_me().username
-        ref_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM users WHERE referrer = ?', (user_id,))
-        ref_count = cursor.fetchone()[0]
-        conn.close()
-        bot.send_message(message.chat.id, f"👥 **Referal Tizimi**\n\nDo'stlaringizni taklif qiling va har biri uchun **{REF_BONUS} so'm** oling! 🎁✨\n\n🔗 Sizning havolangiz:\n`{ref_link}`\n\n📊 Taklif qilgan do'stlaringiz: {ref_count} ta", parse_mode="Markdown")
-        return
-
-    elif text == "🏆 TOP-10 Odam qo'shganlar":
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT u.username, COUNT(r.user_id) as ref_count 
-            FROM users u 
-            LEFT JOIN users r ON r.referrer = u.user_id 
-            GROUP BY u.user_id 
-            ORDER BY ref_count DESC 
-            LIMIT 10
-        ''')
-        top_refs = cursor.fetchall()
-        conn.close()
-
-        top_text = "🏆 **TOP-10 Eng faol foydalanuvchilar:**\n\n"
-        for idx, (uname, count) in enumerate(top_refs, 1):
-            name = uname if uname else f"Foydalanuvchi"
-            top_text += f"{idx}. {name} — **{count}** ta do'st 👥\n"
         
-        bot.send_message(message.chat.id, top_text, parse_mode="Markdown")
-        return
+    await callback.message.delete()
+    # Obuna tasdiqlangach start menyusini qayta chaqiramiz
+    fake_message = callback.message
+    fake_message.from_user = callback.from_user
+    await cmd_start(fake_message)
 
-    elif text == "💸 Pulni yechib olish":
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("💳 Bank kartasiga", callback_data="withdraw_card"))
-        markup.add(types.InlineKeyboardButton("🌟 Telegram Stars / Gift", callback_data="withdraw_stars"))
-        bot.send_message(message.chat.id, "💸 Pulni qaysi usulda yechib olmoqchisiz? Tanlang 👇✨", reply_markup=markup)
-        return
 
-    elif text == "🎟 Promokod":
-        user_state[user_id] = "waiting_promocode"
-        bot.send_message(message.chat.id, "🎟 Iltimos, promokodni kiriting 🔑:")
-        return
+# ==========================================
+# 2. KANALGA ADMIN QILINGANDA AVTOMATIK QO'SHILISH
+# ==========================================
+@dp.my_chat_member()
+async def bot_added_to_channel(event: types.ChatMemberUpdated):
+    if event.new_chat_member.status in ["administrator", "creator"]:
+        chat_id = event.chat.id
+        chat_title = event.chat.title
+        
+        channels_db.add(chat_id)
+        channel_names[chat_id] = chat_title
+        
+        if chat_id not in channel_usage_count:
+            channel_usage_count[chat_id] = 0
+            
+        logging.info(f"Yangi kanalga qo'shildim: {chat_title} ({chat_id})")
 
-    elif text == "📜 Mening yutuqlarim":
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT prize, box_info, date FROM history WHERE user_id = ? ORDER BY id DESC LIMIT 10', (user_id,))
-        rows = cursor.fetchall()
-        conn.close()
-        if not rows:
-            bot.send_message(message.chat.id, "📜 Yutuqlar tarixingiz hozircha bo'sh. 📭")
-        else:
-            text_hist = "📜 **Oxirgi yutuqlaringiz:**\n\n"
-            for r in rows:
-                text_hist += f"🎁 Sovrin: **{r[0]}**\n📦 Quti: {r[1]}\n⏰ Vaqt: {r[2]}\n-------------------\n"
-            bot.send_message(message.chat.id, text_hist, parse_mode="Markdown")
-        return
 
-    elif text == "🎁 Kundalik bonus":
-        current_time = time.time()
-        last_time = last_daily_bonus.get(user_id, 0)
-        if current_time - last_time < 86400:
-            bot.send_message(message.chat.id, "⏳ Kunlik bonusni allaqachon olgansiz! 24 soatdan keyin yana urinib ko'ring. ⏰")
-        else:
-            last_daily_bonus[user_id] = current_time
-            update_user_balance(user_id, DAILY_BONUS)
-            add_history(user_id, f"{DAILY_BONUS} so'm", "Kunlik bonus")
-            bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Kunlik bonus sifatida **{DAILY_BONUS} so'm** qo'shildi! 🌟✨", parse_mode="Markdown")
-        return
+# ==========================================
+# 3. O'YIN VA INTERAKTIV TUGMALAR
+# ==========================================
+@dp.callback_query(F.data == "start_game")
+async def process_game(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⭐ Ball yig'ish / Ovoz berish", callback_data="vote_action")
+    builder.button(text="🔙 Ortga", callback_data="back_home")
+    builder.adjust(1)
+    
+    await callback.message.edit_text(
+        "🎮 **O'yin rejimi faollashdi!**\n\n"
+        "Ishtirokchilar quyidagi tugma orqali o'z ballarini yig'ishlari va faollik ko'rsatishlari mumkin.",
+        reply_markup=builder.as_markup()
+    )
 
-    elif text == "🎁 Tekin sandiq":
-        free_max = get_max_boxes("free_max_boxes")
-        markup = types.InlineKeyboardMarkup(row_width=5)
-        markup.add(*(types.InlineKeyboardButton(f"📦 {i}", callback_data=f"free_box_{i}") for i in range(1, free_max + 1)))
-        bot.send_message(message.chat.id, "🎁 O'zingizga yoqqan tekin sandiqni tanlang 👇:", reply_markup=markup)
-        return
 
-    elif text == "💎 VIP (Pullik) sandiq":
-        bal = get_user_balance(user_id)
-        if bal < PAID_PRICE:
-            bot.send_message(message.chat.id, f"❌ Balansingiz yetarli emas! VIP sandiq narxi: {PAID_PRICE} so'm 💎")
-        else:
-            vip_max = get_max_boxes("vip_max_boxes")
-            markup = types.InlineKeyboardMarkup(row_width=5)
-            markup.add(*(types.InlineKeyboardButton(f"💎 {i}", callback_data=f"vip_box_{i}") for i in range(1, vip_max + 1)))
-            bot.send_message(message.chat.id, "💎 VIP sandiqni tanlang 👇:", reply_markup=markup)
-        return
+@dp.callback_query(F.data == "vote_action")
+async def vote_handler(callback: types.CallbackQuery):
+    await callback.answer("✅ Faolligingiz muvaffaqiyatli qo'shildi!", show_alert=True)
 
-    elif text == "➕ Hisobni to'ldirish":
-        user_state[user_id] = "waiting_topup_amount"
-        bot.send_message(message.chat.id, f"💳 Karta raqami: `{CARD_NUMBER}`\nKarta egasi: {CARD_NAME}\n\nQancha summa tashlaganingizni raqamlarda yozing (masalan: `10000`): 💵", parse_mode="Markdown")
-        return
 
-    # Holatlar (States)
-    if isinstance(state, dict) and state.get("state") == "waiting_withdraw_card_number":
-        card_num = text.strip()
-        user_state[user_id] = {"state": "waiting_withdraw_card_amount", "card": card_num}
-        bot.send_message(message.chat.id, f"💵 Qancha summa yechib olasiz? (Balansingiz: {get_user_balance(user_id)} so'm): 💳")
-        return
+# ==========================================
+# 4. TOP 10 KANALLAR REYTINGI
+# ==========================================
+@dp.callback_query(F.data == "top_channels")
+async def show_top_channels(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Ortga", callback_data="back_home")
+    
+    sorted_channels = sorted(channel_usage_count.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    text = "🏆 **Botdan eng ko'p foydalanayotgan TOP 10 kanallar:**\n\n"
+    
+    if not sorted_channels or all(count == 0 for _, count in sorted_channels):
+        text += "Hozircha faol kanallar mavjud emas yoki statistika yig'ilmoqda."
+    else:
+        for idx, (cid, count) in enumerate(sorted_channels, 1):
+            name = channel_names.get(cid, f"Kanal #{cid}")
+            text += f"{idx}. **{name}** — {count} ta faollik\n"
+            
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())
 
-    if isinstance(state, dict) and state.get("state") == "waiting_withdraw_card_amount":
-        card_info = state.get("card")
-        user_state[user_id] = None
-        if text.isdigit():
-            amt = int(text)
-            bal = get_user_balance(user_id)
-            if amt > bal:
-                bot.send_message(message.chat.id, "❌ Balansingizda buncha pul yo'q! ⚠️")
-            else:
-                update_user_balance(user_id, -amt)
-                bot.send_message(message.chat.id, "✅ Pul yechish uchun arizangiz adminga yuborildi! 🚀✨")
-                try:
-                    bot.send_message(ADMIN_ID, f"💸 **Yangi Karta orqali yechish arizasi!**\n\n👤 ID: `{user_id}`\n💳 Karta: `{card_info}`\n💰 Summa: {amt} so'm", parse_mode="Markdown")
-                except: pass
-        return
 
-    if isinstance(state, dict) and state.get("state") == "waiting_withdraw_stars_username":
-        uname = text.strip()
-        user_state[user_id] = {"state": "waiting_withdraw_stars_amount", "username": uname}
-        bot.send_message(message.chat.id, f"💵 Qancha summa yechib olasiz? (Balansingiz: {get_user_balance(user_id)} so'm):\n💡 *Eslatma: 1 Stars = 133 so'm* ⭐", parse_mode="Markdown")
-        return
+@dp.callback_query(F.data == "about_bot")
+async def about_bot(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Ortga", callback_data="back_home")
+    
+    await callback.message.edit_text(
+        "ℹ️ **Bot haqida ma'lumot:**\n\n"
+        "Bu bot Telegram kanallari uchun mo'ljallangan professional o'yin va tanlov vositasi hisoblanadi.\n"
+        "Savollar va takliflar uchun admin bilan bog'laning.",
+        reply_markup=builder.as_markup()
+    )
 
-    if isinstance(state, dict) and state.get("state") == "waiting_withdraw_stars_amount":
-        username = state.get("username")
-        user_state[user_id] = None
-        if text.isdigit():
-            amt = int(text)
-            bal = get_user_balance(user_id)
-            if amt > bal:
-                bot.send_message(message.chat.id, "❌ Balansingizda buncha pul yo'q! ⚠️")
-            else:
-                stars_count = round(amt / 133, 1)
-                update_user_balance(user_id, -amt)
-                bot.send_message(message.chat.id, "✅ Stars/Gift orqali yechish arizasi adminga yuborildi! 🌟🚀")
-                try:
-                    bot.send_message(ADMIN_ID, f"💸 **Yangi Stars / Gift yechish arizasi!**\n\n👤 ID: `{user_id}`\n🌐 Username: {username}\n💰 Summa: {amt} so'm\n⭐ Stars miqdori: ~{stars_count} Stars (1 Stars = 133 so'm)", parse_mode="Markdown")
-                except: pass
-        return
 
-    if state == "waiting_promocode":
-        user_state[user_id] = None
-        handle_promo_activation(message, user_id, text.strip().upper())
-        return
+@dp.callback_query(F.data == "back_home")
+async def back_home(callback: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="🎮 O'yinni boshlash", callback_data="start_game"),
+        types.InlineKeyboardButton(text="🏆 Top 10 Kanallar", callback_data="top_channels")
+    )
+    builder.row(
+        types.InlineKeyboardButton(text="ℹ️ Bot haqida", callback_data="about_bot")
+    )
+    await callback.message.edit_text(
+        "👋 Asosiy menyuga xush kelibsiz! Kerakli bo'limni tanlang:",
+        reply_markup=builder.as_markup()
+    )
 
-    if state == "waiting_topup_amount":
-        if text.isdigit():
-            topup_amounts[user_id] = int(text)
-            user_state[user_id] = "waiting_topup_screen"
-            bot.send_message(message.chat.id, "📸 Endi to'lov cheki skrinshotini yuboring 👇:")
-        else:
-            user_state[user_id] = None
-        return
 
-    # Admin Tugmalari
-    if text == "👨‍💻 Admin Panel" and user_id == ADMIN_ID:
-        send_admin_panel(message.chat.id)
+# ==========================================
+# 5. KENGAYTIRILGAN ADMIN PANEL VA STATISTIKA (/admin)
+# ==========================================
+@dp.message(Command("admin"))
+async def admin_panel(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ Kechirasiz, bu buyruq faqat bot egasi uchun!")
         return
-    if text == "📢 Kanal Sozlash" and user_id == ADMIN_ID:
-        user_state[user_id] = "set_channel"
-        bot.send_message(message.chat.id, "🔗 Kanal username yoki ID sini yuboring:")
-        return
-    if text == "📋 Kanallar ro'yxati" and user_id == ADMIN_ID:
-        if not forced_channels:
-            bot.send_message(message.chat.id, "📭 Hozircha kanallar yo'q.")
-        else:
-            markup = types.InlineKeyboardMarkup()
-            for idx, ch in enumerate(forced_channels):
-                markup.add(types.InlineKeyboardButton(f"❌ O'chirish: {ch['title']}", callback_data=f"del_ch_{idx}"))
-            bot.send_message(message.chat.id, "📋 Kanallar ro'yxati:", reply_markup=markup)
-        return
-    if text == "💎 VIP narxini o'zgartirish" and user_id == ADMIN_ID:
-        user_state[user_id] = "set_vip_price"
-        bot.send_message(message.chat.id, f"Hozirgi VIP narx: {PAID_PRICE} so'm. Yangisini kiriting:")
-        return
-    if text == "🎁 Kunlik bonusni o'zgartirish" and user_id == ADMIN_ID:
-        user_state[user_id] = "set_daily_bonus"
-        bot.send_message(message.chat.id, "Yangi kunlik bonus miqdorini kiriting:")
-        return
-    if text == "👥 Referal bonusini o'zgartirish" and user_id == ADMIN_ID:
-        user_state[user_id] = "set_ref_bonus"
-        bot.send_message(message.chat.id, f"Hozirgi referal bonus: {REF_BONUS} so'm. Yangi qiymatini kiriting:")
-        return
-    if text == "🎟 Promokod qo'shish" and user_id == ADMIN_ID:
-        user_state[user_id] = "add_promo_code"
-        bot.send_message(message.chat.id, "Format: `KOD 1000 5`", parse_mode="Markdown")
-        return
-    if text == "👤 Foydalanuvchini boshqarish" and user_id == ADMIN_ID:
-        user_state[user_id] = "manage_user_id"
-        bot.send_message(message.chat.id, "Foydalanuvchi Telegram ID raqamini kiriting:")
-        return
-    if text == "📢 Xabar yuborish (Rassilka)" and user_id == ADMIN_ID:
-        user_state[user_id] = "broadcast_message"
-        bot.send_message(message.chat.id, "Barchaga yuboriladigan xabarni kiriting:")
-        return
-    if text == "📦 Qutilarni sozlash" and user_id == ADMIN_ID:
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("Tekin qutilarga sovrin qo'shish", "VIP qutilarga sovrin qo'shish")
-        markup.add("Tekin qutilar sonini o'zgartirish", "VIP qutilar sonini o'zgartirish")
-        markup.add("⬅️ Orqaga")
-        bot.send_message(message.chat.id, "Qaysi birini sozlaysiz? ⚙️", reply_markup=markup)
-        return
-    if text == "Tekin qutilar sonini o'zgartirish" and user_id == ADMIN_ID:
-        user_state[user_id] = "set_free_max_boxes"
-        bot.send_message(message.chat.id, "Tekin qutilar sonini kiriting:")
-        return
-    if text == "VIP qutilar sonini o'zgartirish" and user_id == ADMIN_ID:
-        user_state[user_id] = "set_vip_max_boxes"
-        bot.send_message(message.chat.id, "VIP qutilar sonini kiriting:")
-        return
-    if text == "Tekin qutilarga sovrin qo'shish" and user_id == ADMIN_ID:
-        free_max = get_max_boxes("free_max_boxes")
-        markup = types.InlineKeyboardMarkup(row_width=5)
-        markup.add(*(types.InlineKeyboardButton(f"Quti {i}", callback_data=f"cfg_free_{i}") for i in range(1, free_max + 1)))
-        bot.send_message(message.chat.id, "Qaysi tekin qutiga sovrin yozasiz? 📦", reply_markup=markup)
-        return
-    if text == "VIP qutilarga sovrin qo'shish" and user_id == ADMIN_ID:
-        vip_max = get_max_boxes("vip_max_boxes")
-        markup = types.InlineKeyboardMarkup(row_width=5)
-        markup.add(*(types.InlineKeyboardButton(f"VIP {i}", callback_data=f"cfg_vip_{i}") for i in range(1, vip_max + 1)))
-        bot.send_message(message.chat.id, "Qaysi VIP qutiga sovrin yozasiz? 💎", reply_markup=markup)
-        return
-    if text == "⬅️ Orqaga" and user_id == ADMIN_ID:
-        send_admin_panel(message.chat.id)
-        return
-    if text == "📊 To'liq Statistika" and user_id == ADMIN_ID:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*), SUM(balance) FROM users')
-        u_count, total_bal = cursor.fetchone()
-        total_bal = total_bal if total_bal else 0
-        conn.close()
+        
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📊 Batafsil Statistika", callback_data="admin_stats")
+    builder.button(text="📢 Xabar yuborish (Broadcast)", callback_data="admin_broadcast")
+    builder.adjust(1)
+    
+    await message.answer(
+        "👑 **Admin Panelga xush kelibsiz!**\n\n"
+        "Quyidagi boshqaruv elementlaridan birini tanlang:",
+        reply_markup=builder.as_markup()
+    )
 
-        stat_text = (
-            f"📊 **To'liq Statistika**\n\n"
-            f"👥 Jami foydalanuvchilar: {u_count} ta\n"
-            f"💰 Jami balanslar: {total_bal} so'm\n"
-            f"🎁 Referal bonus qiymati: {REF_BONUS} so'm\n"
-        )
-        bot.send_message(message.chat.id, stat_text, parse_mode="Markdown")
+
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
         return
-    if text == "🚪 Menuga qaytish":
-        send_main_menu(message.chat.id, user_id)
+        
+    now = datetime.now()
+    
+    # Vaqtlar bo'yicha foydalanuvchilarni hisoblash
+    total_users = len(users_db)
+    day_1 = sum(1 for uid, t in users_joined_time.items() if now - t <= timedelta(days=1))
+    days_7 = sum(1 for uid, t in users_joined_time.items() if now - t <= timedelta(days=7))
+    days_30 = sum(1 for uid, t in users_joined_time.items() if now - t <= timedelta(days=30))
+    
+    total_channels = len(channels_db)
+    
+    stats_text = (
+        f"📊 **Botning Kengaytirilgan Statistikasi:**\n\n"
+        f"📢 **Kanallar bo'yicha:**\n"
+        f"• Bot admin bo'lgan kanallar soni: **{total_channels} ta**\n\n"
+        f"👥 **Foydalanuvchilar bo'yicha:**\n"
+        f"• Oxirgi 24 soatda qo'shilganlar: **{day_1} ta**\n"
+        f"• Oxirgi 7 kunda qo'shilganlar: **{days_7} ta**\n"
+        f"• Oxirgi 1 oyda qo'shilganlar: **{days_30} ta**\n"
+        f"• Umumiy foydalanuvchilar soni: **{total_users} ta**\n\n"
+        f"🟢 **Server holati:** Barqaror ishlayapti"
+    )
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Ortga", callback_data="admin_back")
+    
+    await callback.message.edit_text(stats_text, reply_markup=builder.as_markup())
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_back")
+async def admin_back(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
         return
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📊 Batafsil Statistika", callback_data="admin_stats")
+    builder.button(text="📢 Xabar yuborish (Broadcast)", callback_data="admin_broadcast")
+    builder.adjust(1)
+    
+    await callback.message.edit_text(
+        "👑 **Admin Panelga xush kelibsiz!**\n\n"
+        "Quyidagi boshqaruv elementlaridan birini tanlang:",
+        reply_markup=builder.as_markup()
+    )
 
-@bot.message_handler(content_types=['photo'])
-def handle_photo(message):
-    user_id = message.from_user.id
-    if user_state.get(user_id) == "waiting_topup_screen":
-        amount = topup_amounts.get(user_id, 0)
-        photo_id = message.photo[-1].file_id
-        user_state[user_id] = None
-        bot.send_message(message.chat.id, "✅ To'lov chekingiz adminga yuborildi! Tekshirilgach tasdiqlanadi. ⏳")
-        admin_markup = types.InlineKeyboardMarkup()
-        admin_markup.add(types.InlineKeyboardButton("➕ Tasdiqlash", callback_data=f"approve_topup_{user_id}_{amount}"))
-        try:
-            bot.send_photo(ADMIN_ID, photo_id, caption=f"📸 To'lov cheki keldi!\nID: `{user_id}`\nSumma: {amount} so'm", reply_markup=admin_markup, parse_mode="Markdown")
-        except: pass
 
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-    user_id = call.from_user.id
-    data = call.data
+# ==========================================
+# BOTNI ISHGA TUSHIRISH
+# ==========================================
+async def main():
+    await dp.start_polling(bot)
 
-    if data == "withdraw_card":
-        user_state[user_id] = {"state": "waiting_withdraw_card_number"}
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "💳 Bank karta raqamingizni kiriting (masalan: `9860...`):", parse_mode="Markdown")
-        return
-
-    if data == "withdraw_stars":
-        user_state[user_id] = {"state": "waiting_withdraw_stars_username"}
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, "🌟 Telegram username'ingizni yuboring (masalan: `@username`):\n💡 *1 Stars = 133 so'm*", parse_mode="Markdown")
-        return
-
-    if data.startswith("del_ch_") and user_id == ADMIN_ID:
-        idx = int(data.split("_")[2])
-        if 0 <= idx < len(forced_channels):
-            forced_channels.pop(idx)
-            bot.answer_callback_query(call.id, f"✅ O'chirildi")
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="✅ Kanal o'chirildi.")
-        return
-
-    if data.startswith("cfg_free_") and user_id == ADMIN_ID:
-        box_num = data.split("_")[2]
-        user_state[user_id] = f"set_free_box_{box_num}"
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, f"Tekin quti ({box_num}) uchun sovrin yozing:")
-        return
-
-    if data.startswith("cfg_vip_") and user_id == ADMIN_ID:
-        box_num = data.split("_")[2]
-        user_state[user_id] = f"set_vip_box_{box_num}"
-        bot.answer_callback_query(call.id)
-        bot.send_message(call.message.chat.id, f"VIP quti ({box_num}) uchun sovrin yozing:")
-        return
-
-    if data.startswith("approve_topup_") and user_id == ADMIN_ID:
-        parts = data.split("_")
-        target_uid = int(parts[2])
-        amount = int(parts[3])
-        update_user_balance(target_uid, amount)
-        add_history(target_uid, f"{amount} so'm", "Hisobni to'ldirish")
-        bot.answer_callback_query(call.id, "✅ Tasdiqlandi!")
-        try: bot.edit_message_caption(caption=call.message.caption + "\n\n[✅ TASDIQLANDI]", chat_id=call.message.chat.id, message_id=call.message.message_id) except: pass
-        bot.send_message(target_uid, f"🎉 To'lovingiz tasdiqlandi! Balansingizga **{amount} so'm** qo'shildi. 💰", parse_mode="Markdown")
-        return
-
-    if data.startswith("free_box_"):
-        box_num = int(data.split("_")[2])
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM user_opened_free WHERE user_id = ?', (user_id,))
-        if cursor.fetchone():
-            conn.close()
-            bot.answer_callback_query(call.id, "❌ Siz allaqachon tekin sandiq ochgansiz!", show_alert=True)
-            return
-        prize = free_box_prizes.get(box_num, "Bo'sh")
-        cursor.execute('INSERT INTO user_opened_free (user_id, box_num, prize) VALUES (?, ?, ?)', (user_id, box_num, prize))
-        conn.commit()
-        conn.close()
-        add_history(user_id, prize, f"{box_num}-tekin sandiq")
-        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"🎁 Sandiq yutug'i: **{prize}** 🏆", parse_mode="Markdown")
-
-    elif data.startswith("vip_box_"):
-        box_num = int(data.split("_")[2])
-        bal = get_user_balance(user_id)
-        if bal < PAID_PRICE:
-            bot.answer_callback_query(call.id, "❌ Balans yetmadi!", show_alert=True)
-            return
-        update_user_balance(user_id, -PAID_PRICE)
-        prize = vip_box_prizes.get(box_num, "Bo'sh")
-        add_history(user_id, prize, f"{box_num}-VIP sandiq")
-        bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"💎 VIP Sandiq yutug'i: **{prize}** 🚀", parse_mode="Markdown")
-
-bot.infinity_polling()
+if __name__ == "__main__":
+    asyncio.run(main())
