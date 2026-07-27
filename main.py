@@ -6,6 +6,7 @@ from telebot import types
 import random
 import time
 import sqlite3
+from datetime import datetime, timedelta
 
 # ==================== FLASK SERVER ====================
 app = Flask(__name__)
@@ -24,6 +25,7 @@ threading.Thread(target=run_flask).start()
 # ==================== SOZLAMALAR ====================
 TOKEN = "8630740028:AAGeLn8RLQczuX75cAay1S3VCRl8omXLHeA"
 ADMIN_ID = 8694110588
+CHANNEL_ID = "@ovozbattleofficial" # Promokod tashlanadigan kanal username yoki ID si
 
 CARD_NUMBER = "9860606756173831"
 CARD_NAME = "Abbosov Abrorbek"
@@ -43,22 +45,17 @@ vip_cooldowns = {}
 
 free_box_prizes = {} 
 vip_box_prizes = { 5: "10000 so'm", 10: "50000 so'm" }
-promocodes = { "START2026": {"amount": 1000, "limit": 10, "used_count": 0} }
+promocodes = {} # { "KOD": {"amount": 1000, "limit": 3, "used_count": 0, "msg_id": None, "channel_id": None} }
 
 # ==================== DATABASE ====================
 def init_db():
     conn = sqlite3.connect('bot_database.db', check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, balance INTEGER DEFAULT 0, joined_date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, prize TEXT, box_info TEXT, date TEXT)')
     cursor.execute('CREATE TABLE IF NOT EXISTS used_promos (user_id INTEGER, code TEXT)')
-    
-    # 1) Har bir foydalanuvchi faqat 1 marta tekin quti ochgani uchun
     cursor.execute('CREATE TABLE IF NOT EXISTS user_opened_free (user_id INTEGER PRIMARY KEY, box_num INTEGER, prize TEXT)')
-    
-    # 2) Qaysi qutilar umumiy ochilgani (boshqalar kira olmasligi uchun)
     cursor.execute('CREATE TABLE IF NOT EXISTS global_opened_free_boxes (box_num INTEGER PRIMARY KEY, user_id INTEGER)')
-    
     cursor.execute('CREATE TABLE IF NOT EXISTS vip_opened_boxes (user_id INTEGER, box_num INTEGER, prize TEXT, PRIMARY KEY (user_id, box_num))')
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     conn.commit()
@@ -98,17 +95,19 @@ def get_user_balance(user_id):
     if row:
         return row[0]
     else:
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)', (user_id,))
+        cursor.execute('INSERT OR IGNORE INTO users (user_id, balance, joined_date) VALUES (?, 0, ?)', (user_id, date_str))
         conn.commit()
         conn.close()
         return 0
 
 def update_user_balance(user_id, amount):
+    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)', (user_id,))
+    cursor.execute('INSERT OR IGNORE INTO users (user_id, balance, joined_date) VALUES (?, 0, ?)', (user_id, date_str))
     cursor.execute('UPDATE users SET balance = balance + ? WHERE user_id = ?', (amount, user_id))
     conn.commit()
     conn.close()
@@ -116,7 +115,7 @@ def update_user_balance(user_id, amount):
 def add_history(user_id, prize, box_info):
     conn = get_db_connection()
     cursor = conn.cursor()
-    date_str = time.strftime("%Y-%m-%d %H:%M:%S")
+    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     cursor.execute('INSERT INTO history (user_id, prize, box_info, date) VALUES (?, ?, ?, ?)', (user_id, prize, box_info, date_str))
     conn.commit()
     conn.close()
@@ -144,6 +143,14 @@ def send_sub_request(chat_id):
 @bot.message_handler(commands=['start'])
 def start_cmd(message):
     user_id = message.from_user.id
+    
+    # Parametrli start (masalan: /start promo_KOD)
+    args = message.text.split()
+    if len(args) > 1 and args[1].startswith("promo_"):
+        code = args[1].replace("promo_", "").upper()
+        handle_promo_activation(message, user_id, code)
+        return
+
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
@@ -164,6 +171,77 @@ def start_cmd(message):
         bot.send_message(message.chat.id, f"🤖 Xush kelibsiz!\n\nCaptcha misolini yeching:\n👉 **{num1} + {num2} = ?**", parse_mode="Markdown")
     else:
         send_main_menu(message.chat.id, user_id)
+
+def handle_promo_activation(message, user_id, code):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT 1 FROM used_promos WHERE user_id = ? AND code = ?', (user_id, code))
+    already_used = cursor.fetchone()
+    conn.close()
+
+    if code in promocodes:
+        p_info = promocodes[code]
+        if already_used:
+            bot.send_message(message.chat.id, "❌ Bu promokondan foylangansiz!")
+        elif p_info["used_count"] >= p_info["limit"]:
+            bot.send_message(message.chat.id, "❌ Bu promokod tugagan!")
+        else:
+            p_info["used_count"] += 1
+            amt = p_info["amount"]
+            update_user_balance(user_id, amt)
+            
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO used_promos (user_id, code) VALUES (?, ?)', (user_id, code))
+            conn.commit()
+            conn.close()
+            
+            add_history(user_id, f"{amt} so'm", f"Promokod ({code})")
+            bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Promokod muvaffaqiyatli ishlatildi va balansga **{amt} so'm** qo'shildi!", parse_mode="Markdown")
+
+            # Kanaldagi xabarni yangilash
+            update_channel_promo_message(code)
+
+            # Adminga xabar yuborish
+            user_name = f"@{message.from_user.username}" if message.from_user.username else f"ID: {user_id}"
+            try:
+                bot.send_message(ADMIN_ID, f"🔔 **Yangi promokod ishlatildi!**\n\n👤 Foydalanuvchi: {user_name} (`{user_id}`)\n🔑 Kod: `{code}`\n💰 Miqdor: {amt} so'm\n📊 Limit: {p_info['used_count']}/{p_info['limit']}", parse_mode="Markdown")
+            except:
+                pass
+
+            if p_info["used_count"] >= p_info["limit"]:
+                try:
+                    bot.send_message(ADMIN_ID, f"🚨 **DIQQAT!** `{code}` promokodi limiti to'liq tugadi ({p_info['limit']}/{p_info['limit']}).", parse_mode="Markdown")
+                except:
+                    pass
+    else:
+        bot.send_message(message.chat.id, "❌ Bunday promokod topilmadi yoki eskirgan!")
+    
+    send_main_menu(message.chat.id, user_id)
+
+def update_channel_promo_message(code):
+    p_info = promocodes.get(code)
+    if not p_info or not p_info.get("msg_id"):
+        return
+    
+    msg_id = p_info["msg_id"]
+    used = p_info["used_count"]
+    limit = p_info["limit"]
+    amt = p_info["amount"]
+
+    if used >= limit:
+        text = f"🎁 **PROMOKOD TUGADI!**\n\n🔑 Promo: `{code}`\n💰 Qiymati: {amt} so'm\n👥 Limit: {limit}/{limit} ❌"
+        markup = None
+    else:
+        text = f"🎁 **YANGI PROMOKOD!**\n\n🔑 Promo: `{code}`\n💰 Qiymati: {amt} so'm\n👥 Limit: {used}/{limit} ✅"
+        markup = types.InlineKeyboardMarkup()
+        bot_username = bot.get_me().username
+        markup.add(types.InlineKeyboardButton("🎁 Promokodni ishlatish", url=f"https://t.me/{bot_username}?start=promo_{code}"))
+
+    try:
+        bot.edit_message_text(text=text, chat_id=CHANNEL_ID, message_id=msg_id, reply_markup=markup, parse_mode="Markdown")
+    except:
+        pass
 
 @bot.callback_query_handler(func=lambda call: call.data == "check_subscription")
 def callback_check_sub(call):
@@ -209,7 +287,7 @@ def send_admin_panel(chat_id):
     markup.add("🎟 Promokod qo'shish", "🎁 Kunlik bonusni o'zgartirish")
     markup.add("👤 Foydalanuvchini boshqarish", "📢 Xabar yuborish (Rassilka)")
     markup.add("🔄 Tekin sandiqlarni yangilash")
-    markup.add("📊 Statistika", "🚪 Menuga qaytish")
+    markup.add("📊 To'liq Statistika", "🚪 Menuga qaytish")
     
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -296,10 +374,29 @@ def handle_menu(message):
             parts = text.split()
             if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
                 code_name = parts[0].upper()
-                promocodes[code_name] = {"amount": int(parts[1]), "limit": int(parts[2]), "used_count": 0}
-                bot.send_message(message.chat.id, f"✅ Promokod qo'shildi: {code_name}")
+                amt = int(parts[1])
+                lim = int(parts[2])
+                
+                promocodes[code_name] = {"amount": amt, "limit": lim, "used_count": 0, "msg_id": None}
+                
+                # Kanalga avtomatik yuborish va tugma qo'shish
+                try:
+                    bot_username = bot.get_me().username
+                    markup = types.InlineKeyboardMarkup()
+                    markup.add(types.InlineKeyboardButton("🎁 Promokodni ishlatish", url=f"https://t.me/{bot_username}?start=promo_{code_name}"))
+                    
+                    sent_msg = bot.send_message(
+                        CHANNEL_ID, 
+                        f"🎁 **YANGI PROMOKOD!**\n\n🔑 Promo: `{code_name}`\n💰 Qiymati: {amt} so'm\n👥 Limit: 0/{lim} ✅", 
+                        reply_markup=markup, 
+                        parse_mode="Markdown"
+                    )
+                    promocodes[code_name]["msg_id"] = sent_msg.message_id
+                    bot.send_message(message.chat.id, f"✅ Promokod muvaffaqiyatli yaratildi va kanalga tashlandi!")
+                except Exception as e:
+                    bot.send_message(message.chat.id, f"✅ Promokod bazaga qo'shildi, lekin kanalga yuborishda xatolik: {e}")
             else:
-                bot.send_message(message.chat.id, "❌ Noto'g'ri format!")
+                bot.send_message(message.chat.id, "❌ Noto'g'ri format! Masalan: `BONUS 1000 3`", parse_mode="Markdown")
             send_admin_panel(message.chat.id)
             return
 
@@ -424,7 +521,6 @@ def handle_menu(message):
 
     elif text == "🎁 Tekin sandiq":
         user_state[user_id] = None
-        
         free_max = get_max_boxes("free_max_boxes")
         markup = types.InlineKeyboardMarkup(row_width=5)
         buttons = []
@@ -467,31 +563,7 @@ def handle_menu(message):
     if state == "waiting_promocode":
         code = text.strip().upper()
         user_state[user_id] = None
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT 1 FROM used_promos WHERE user_id = ? AND code = ?', (user_id, code))
-        already_used = cursor.fetchone()
-        conn.close()
-
-        if code in promocodes:
-            p_info = promocodes[code]
-            if already_used:
-                bot.send_message(message.chat.id, "❌ Bu promokoddan foylangansiz!")
-            elif p_info["used_count"] >= p_info["limit"]:
-                bot.send_message(message.chat.id, "❌ Promokod limiti tugagan!")
-            else:
-                p_info["used_count"] += 1
-                amt = p_info["amount"]
-                update_user_balance(user_id, amt)
-                conn = get_db_connection()
-                cursor = conn.cursor()
-                cursor.execute('INSERT INTO used_promos (user_id, code) VALUES (?, ?)', (user_id, code))
-                conn.commit()
-                conn.close()
-                add_history(user_id, f"{amt} so'm", f"Promokod ({code})")
-                bot.send_message(message.chat.id, f"🎉 Tabriklaymiz! Balansga **{amt} so'm** qo'shildi!", parse_mode="Markdown")
-        else:
-            bot.send_message(message.chat.id, "❌ Bunday promokod yo'q!")
+        handle_promo_activation(message, user_id, code)
         return
 
     if state == "waiting_topup_amount":
@@ -537,7 +609,7 @@ def handle_menu(message):
 
     if text == "🎟 Promokod qo'shish" and user_id == ADMIN_ID:
         user_state[user_id] = "add_promo_code"
-        bot.send_message(message.chat.id, "Format: `BONUS 5000 15`", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "Format: `BONUS 1000 3` (Kod, Summa, Limit)", parse_mode="Markdown")
         return
 
     if text == "👤 Foydalanuvchini boshqarish" and user_id == ADMIN_ID:
@@ -591,13 +663,55 @@ def handle_menu(message):
         send_admin_panel(message.chat.id)
         return
 
-    if text == "📊 Statistika" and user_id == ADMIN_ID:
+    if text == "📊 To'liq Statistika" and user_id == ADMIN_ID:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT COUNT(*) FROM users')
-        tot = cursor.fetchone()[0]
+        
+        # Jami foydalanuvchilar va balanslar
+        cursor.execute('SELECT COUNT(*), SUM(balance) FROM users')
+        u_count, total_bal = cursor.fetchone()
+        total_bal = total_bal if total_bal else 0
+
+        # Aktivlik (1 kun, 7 kun, 1 oy)
+        now = datetime.now()
+        d_1 = (now - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+        d_7 = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        d_30 = (now - timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+
+        cursor.execute('SELECT COUNT(*) FROM users WHERE joined_date >= ?', (d_1,))
+        day_1_count = cursor.fetchone()[0]
+
+        cursor.execute('SELECT COUNT(*) FROM users WHERE joined_date >= ?', (d_7,))
+        day_7_count = cursor.fetchone()[0]
+
+        cursor.execute('SELECT COUNT(*) FROM users WHERE joined_date >= ?', (d_30,))
+        day_30_count = cursor.fetchone()[0]
+
+        # Sovrin yutganlar soni (Gift)
+        cursor.execute('SELECT COUNT(DISTINCT user_id) FROM history WHERE prize != "Bo\'sh"')
+        gift_winners_count = cursor.fetchone()[0]
+
+        # Foydalanuvchilarning balansi ro'yxati (eng ko'p puli bor 5 tasi)
+        cursor.execute('SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 5')
+        top_users = cursor.fetchall()
+
         conn.close()
-        bot.send_message(message.chat.id, f"👥 Jami foydalanuvchilar: {tot} ta")
+
+        stat_text = (
+            f"📊 **Kengaytirilgan Statistika**\n\n"
+            f"👥 Jami foydalanuvchilar: {u_count} ta\n"
+            f"💰 Jami balanslar: {total_bal} so'm\n\n"
+            f"📈 **Kirib kelganlar (Aktivlik):**\n"
+            f"• Oxirgi 1 kunda: {day_1_count} ta\n"
+            f"• Oxirgi 7 kunda: {day_7_count} ta\n"
+            f"• Oxirgi 1 oyda: {day_30_count} ta\n\n"
+            f"🎁 Sovrin (Gift) yutib olganlar: {gift_winners_count} kishi\n\n"
+            f"🏆 **Eng ko'p puli bor TOP foydalanuvchilar:**\n"
+        )
+        for idx, tu in enumerate(top_users, 1):
+            stat_text += f"{idx}. ID: `{tu[0]}` — {tu[1]} so'm\n"
+
+        bot.send_message(message.chat.id, stat_text, parse_mode="Markdown")
         return
 
     if text == "🚪 Menuga qaytish":
@@ -637,7 +751,7 @@ def callback_handler(call):
         idx = int(data.split("_")[2])
         if 0 <= idx < len(forced_channels):
             removed = forced_channels.pop(idx)
-            bot.answer_callback_query(call.id, "✅ O'chirildi: {removed['title']}")
+            bot.answer_callback_query(call.id, f"✅ O'chirildi: {removed['title']}")
             bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text="✅ O'chirildi.")
         return
 
@@ -680,7 +794,6 @@ def callback_handler(call):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # 1. Foydalanuvchi allaqachon tekin quti ochganmi?
         cursor.execute('SELECT box_num FROM user_opened_free WHERE user_id = ?', (user_id,))
         user_opened = cursor.fetchone()
 
@@ -689,7 +802,6 @@ def callback_handler(call):
             bot.answer_callback_query(call.id, "❌ Siz allaqachon tekin sandiq ochgansiz!", show_alert=True)
             return
 
-        # 2. Tanlangan bu qutini boshqa odam oldin ochib qo'yganmi?
         cursor.execute('SELECT user_id FROM global_opened_free_boxes WHERE box_num = ?', (box_num,))
         box_taken = cursor.fetchone()
 
@@ -701,7 +813,6 @@ def callback_handler(call):
         prize = free_box_prizes.get(box_num)
         prize_text = prize if prize else "Bo'sh"
 
-        # Bazaga yozib qo'yamiz: foydalanuvchi quti ochdi va quti global band qilindi
         cursor.execute('INSERT INTO user_opened_free (user_id, box_num, prize) VALUES (?, ?, ?)', (user_id, box_num, prize_text))
         cursor.execute('INSERT INTO global_opened_free_boxes (box_num, user_id) VALUES (?, ?)', (box_num, user_id))
         conn.commit()
