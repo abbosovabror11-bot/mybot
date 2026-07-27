@@ -25,7 +25,7 @@ threading.Thread(target=run_flask).start()
 # ==================== SOZLAMALAR ====================
 TOKEN = "8630740028:AAGeLn8RLQczuX75cAay1S3VCRl8omXLHeA"
 ADMIN_ID = 8694110588
-CHANNEL_ID = "@ovozbattleofficial" # Promokod tashlanadigan kanal username yoki ID si
+CHANNEL_ID = "@sandiqcha_official" # Promokod tashlanadigan kanal username yoki ID si
 
 CARD_NUMBER = "9860606756173831"
 CARD_NAME = "Abbosov Abrorbek"
